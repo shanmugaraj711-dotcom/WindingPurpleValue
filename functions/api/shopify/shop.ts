@@ -23,15 +23,6 @@ function decodeJson<T>(value: string): T {
   return JSON.parse(new TextDecoder().decode(decodeBase64Url(value))) as T;
 }
 
-function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
-  if (left.length !== right.length) return false;
-  let difference = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    difference |= left[index] ^ right[index];
-  }
-  return difference === 0;
-}
-
 async function verifyIdToken(token: string, env: Env): Promise<Claims> {
   const parts = token.split(".");
   if (parts.length !== 3) throw new Error("Invalid Shopify ID token.");
@@ -91,7 +82,7 @@ async function exchangeForExpiringOfflineToken(
       client_secret: env.SHOPIFY_API_SECRET,
       grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
       subject_token: idToken,
-      subject_token_type: "urn:shopify:params:oauth:token-type:id_token",
+      subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
       requested_token_type: "urn:shopify:params:oauth:token-type:offline-access-token",
       expiring: "1",
     }),
@@ -138,7 +129,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     };
 
     if (payload.errors?.length) {
-      return Response.json({ error: payload.errors.map((item) => item.message ?? "Unknown Shopify error").join("; ") }, { status: 502 });
+      return Response.json(
+        { error: payload.errors.map((item) => item.message ?? "Unknown Shopify error").join("; ") },
+        { status: 502 },
+      );
     }
 
     return Response.json({ shop: payload.data?.shop ?? null, scope });
@@ -160,5 +154,3 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     );
   }
 };
-
-void equalBytes;
