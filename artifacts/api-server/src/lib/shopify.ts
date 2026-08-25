@@ -1,3 +1,4 @@
+import "@shopify/shopify-api/adapters/node";
 import { ApiVersion } from "@shopify/shopify-api";
 import { shopifyApp } from "@shopify/shopify-app-express";
 import { DrizzleSessionStorage } from "./session-storage";
