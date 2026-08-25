@@ -22,7 +22,7 @@ Set these as Cloudflare Pages environment variables for Production and Preview a
 - `SHOPIFY_API_SECRET` — the Shopify client secret; store it as a secret and never commit it.
 - `SHOPIFY_API_VERSION` — optional; defaults to `2026-07`.
 
-The Pages project should keep the current monorepo build settings that successfully build `@workspace/mockup-sandbox` to its Vite output directory. The root-level `functions/` directory is intentionally outside the static output directory because Cloudflare Pages discovers Pages Functions from the project root. citeturn2search0turn2search1
+The Pages project should keep the current monorepo build settings that successfully build `@workspace/mockup-sandbox` to its Vite output directory. The root-level `functions/` directory is intentionally outside the static output directory because Cloudflare Pages discovers Pages Functions from the project root.
 
 ## Shopify configuration required
 
@@ -32,7 +32,7 @@ The Pages project should keep the current monorepo build settings that successfu
 4. Install CartLift on the development store.
 5. Open CartLift inside Shopify Admin and verify that the startup request reaches `/api/shopify/shop` and returns the store identity.
 
-Shopify's current embedded-app flow uses App Bridge ID tokens, token exchange, and Admin GraphQL; new public apps should request expiring offline tokens with `expiring=1`. citeturn1search0turn3search0turn6search9
+Shopify's current embedded-app flow uses App Bridge ID tokens, token exchange, and Admin GraphQL; new public apps should request expiring offline tokens with `expiring=1`.
 
 ## Verification status
 
