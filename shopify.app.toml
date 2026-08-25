@@ -1,0 +1,22 @@
+# CartLift Shopify App Configuration
+# This file defines the Shopify app boundary.
+
+name = "CartLift"
+client_id = "PLACEHOLDER_CLIENT_ID"
+application_url = "https://PLACEHOLDER_APP_URL"
+embedded = true
+
+[access_scopes]
+# Minimum required scopes for CartLift V1
+scopes = "read_products,read_themes,write_themes"
+
+[auth]
+redirect_urls = [
+  "https://PLACEHOLDER_APP_URL/api/auth/callback"
+]
+
+[webhooks]
+api_version = "2024-01"
+
+[pos]
+embedded = false
