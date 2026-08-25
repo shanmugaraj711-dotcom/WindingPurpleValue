@@ -1,19 +1,12 @@
 import { register } from "@shopify/web-pixels-extension";
 
-register(({ analytics, init, settings }) => {
-  const apiBaseUrl = String(settings.api_base_url || "").replace(/\/$/, "");
-  if (!apiBaseUrl) return;
-
+register(({ analytics, init }) => {
+  const apiBaseUrl = "https://windingpurplevalue.pages.dev";
   const shop = String(init.data.shop?.domain || "");
   if (!shop.endsWith(".myshopify.com")) return;
 
   const send = (eventName: string, payload: Record<string, unknown>) => {
-    const body = JSON.stringify({
-      event: eventName,
-      shop,
-      timestamp: Date.now(),
-      payload,
-    });
+    const body = JSON.stringify({ event: eventName, shop, timestamp: Date.now(), payload });
     fetch(`${apiBaseUrl}/api/analytics`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
