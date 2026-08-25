@@ -13,9 +13,7 @@ function decodeBase64Url(value: string): Uint8Array {
   const binary = atob(padded);
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
-function decodeJson<T>(value: string): T {
-  return JSON.parse(new TextDecoder().decode(decodeBase64Url(value))) as T;
-}
+function decodeJson<T>(value: string): T { return JSON.parse(new TextDecoder().decode(decodeBase64Url(value))) as T; }
 function verifyIdToken(token: string, env: AnalyticsEnv): Claims {
   const parts = token.split(".");
   if (parts.length !== 3) throw new Error(INVALID_ID_TOKEN);
@@ -26,11 +24,10 @@ function verifyIdToken(token: string, env: AnalyticsEnv): Claims {
   if (destination.protocol !== "https:" || !destination.hostname.endsWith(".myshopify.com")) throw new Error(INVALID_ID_TOKEN);
   return claims;
 }
-
 function response(status: number, body: unknown): Response {
-  return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
+  return Response.json(body, { status, headers: { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type,Authorization" } });
 }
-
+export const onRequestOptions: PagesFunction<AnalyticsEnv> = async () => response(204, null);
 export const onRequestPost: PagesFunction<AnalyticsEnv> = async ({ request, env }) => {
   try {
     const body = await request.json() as Record<string, unknown>;
@@ -38,10 +35,8 @@ export const onRequestPost: PagesFunction<AnalyticsEnv> = async ({ request, env 
     const shop = typeof body.shop === "string" ? body.shop : "";
     if (!shop || !/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(shop)) return response(400, { error: "Invalid shop." });
     if (typeof body.timestamp !== "number" || !Number.isFinite(body.timestamp)) return response(400, { error: "Invalid timestamp." });
-
     const allowedEvents = new Set(["page_viewed", "product_viewed", "product_added_to_cart", "product_removed_from_cart", "cart_viewed", "checkout_started", "checkout_completed"]);
     if (!allowedEvents.has(event)) return response(400, { error: "Unsupported event." });
-
     if (env.CARTLIFT_ANALYTICS_KV) {
       const key = `analytics:${shop}`;
       const current = await env.CARTLIFT_ANALYTICS_KV.get(key, "json") as { events?: Record<string, number>; lastEventAt?: number } | null;
@@ -50,13 +45,11 @@ export const onRequestPost: PagesFunction<AnalyticsEnv> = async ({ request, env 
       await env.CARTLIFT_ANALYTICS_KV.put(key, JSON.stringify({ events, lastEventAt: Date.now() }), { expirationTtl: 60 * 60 * 24 * 180 });
       return response(202, { ok: true, persisted: true });
     }
-
     return response(202, { ok: true, persisted: false });
   } catch {
     return response(400, { error: "Invalid analytics event." });
   }
 };
-
 export const onRequestGet: PagesFunction<AnalyticsEnv> = async ({ request, env }) => {
   try {
     const idToken = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
