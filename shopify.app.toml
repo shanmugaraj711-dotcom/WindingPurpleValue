@@ -1,11 +1,11 @@
-# CartLift Shopify App Configuration
+# CartLift Shopify app configuration
 name = "CartLift"
 client_id = "PLACEHOLDER_CLIENT_ID"
 application_url = "https://PLACEHOLDER_APP_URL"
 embedded = true
 
 [access_scopes]
-scopes = "read_products,read_themes"
+scopes = "read_products"
 
 [auth]
 redirect_urls = [
@@ -14,6 +14,3 @@ redirect_urls = [
 
 [webhooks]
 api_version = "2026-07"
-
-[pos]
-embedded = false
