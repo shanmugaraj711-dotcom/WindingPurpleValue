@@ -1,0 +1,17 @@
+{% comment %}
+  CartLift V1 storefront embed foundation.
+  The conversion UI will be wired in the next batch; this block intentionally
+  contains no theme-code edits and remains lightweight when disabled.
+{% endcomment %}
+
+<div id="cartlift-root" data-cartlift="v1" hidden></div>
+
+{% schema %}
+{
+  "name": "CartLift",
+  "target": "body",
+  "javascript": "cartlift.js",
+  "stylesheet": "cartlift.css",
+  "settings": []
+}
+{% endschema %}
