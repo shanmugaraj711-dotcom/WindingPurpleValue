@@ -10,11 +10,3 @@ sale_of_data = "disabled"
 
 [capabilities]
 network_access = true
-
-[settings]
-type = "object"
-
-[settings.fields.api_base_url]
-type = "single_line_text_field"
-name = "CartLift API base URL"
-description = "The HTTPS base URL used for CartLift storefront analytics."
