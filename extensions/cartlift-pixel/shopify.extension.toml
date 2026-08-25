@@ -1,0 +1,9 @@
+name = "CartLift Shopper Analytics"
+type = "web_pixel"
+handle = "cartlift-shopper-analytics"
+
+[settings]
+  type = "object"
+  
+  [settings.fields]
+    endpoint = { type = "single_line_text_field", name = "Analytics endpoint", description = "CartLift analytics endpoint" }
