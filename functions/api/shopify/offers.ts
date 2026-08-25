@@ -24,6 +24,7 @@ type Offer = {
 
 const METAFIELD_NAMESPACE = "cartlift";
 const METAFIELD_KEY = "offers";
+const INVALID_ID_TOKEN = "INVALID_ID_TOKEN";
 
 function decodeBase64Url(value: string): Uint8Array {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
@@ -38,10 +39,10 @@ function decodeJson<T>(value: string): T {
 
 async function verifyIdToken(token: string, env: Env): Promise<Claims> {
   const parts = token.split(".");
-  if (parts.length !== 3) throw new Error("Invalid Shopify ID token.");
+  if (parts.length !== 3) throw new Error(INVALID_ID_TOKEN);
   const [encodedHeader, encodedPayload, encodedSignature] = parts;
   const header = decodeJson<{ alg?: string }>(encodedHeader);
-  if (header.alg !== "HS256") throw new Error("Unsupported Shopify ID token algorithm.");
+  if (header.alg !== "HS256") throw new Error(INVALID_ID_TOKEN);
 
   const secret = await crypto.subtle.importKey(
     "raw",
@@ -56,21 +57,21 @@ async function verifyIdToken(token: string, env: Env): Promise<Claims> {
     decodeBase64Url(encodedSignature),
     new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`),
   );
-  if (!valid) throw new Error("Invalid Shopify ID token signature.");
+  if (!valid) throw new Error(INVALID_ID_TOKEN);
 
   const claims = decodeJson<Claims>(encodedPayload);
   const now = Math.floor(Date.now() / 1000);
-  if (!claims.exp || claims.exp <= now) throw new Error("Shopify ID token has expired.");
-  if (claims.nbf && claims.nbf > now) throw new Error("Shopify ID token is not active yet.");
-  if (claims.aud !== env.SHOPIFY_API_KEY) throw new Error("Shopify ID token audience mismatch.");
-  if (!claims.dest) throw new Error("Shopify ID token destination is missing.");
+  if (!claims.exp || claims.exp <= now) throw new Error(INVALID_ID_TOKEN);
+  if (claims.nbf && claims.nbf > now) throw new Error(INVALID_ID_TOKEN);
+  if (claims.aud !== env.SHOPIFY_API_KEY) throw new Error(INVALID_ID_TOKEN);
+  if (!claims.dest) throw new Error(INVALID_ID_TOKEN);
 
   const destination = new URL(claims.dest);
   if (destination.protocol !== "https:" || !destination.hostname.endsWith(".myshopify.com")) {
-    throw new Error("Shopify ID token destination is invalid.");
+    throw new Error(INVALID_ID_TOKEN);
   }
   if (claims.iss && new URL(claims.iss).hostname !== destination.hostname) {
-    throw new Error("Shopify ID token issuer mismatch.");
+    throw new Error(INVALID_ID_TOKEN);
   }
   return claims;
 }
@@ -89,7 +90,12 @@ async function getAdminAccessToken(shop: string, idToken: string, env: Env): Pro
       expiring: "1",
     }),
   });
+
+  // Shopify uses 400 for an expired/invalid ID token. Signal App Bridge to
+  // obtain a fresh token and replay the request once.
+  if (response.status === 400) throw new Error(INVALID_ID_TOKEN);
   if (!response.ok) throw new Error(`Shopify token exchange failed (${response.status}).`);
+
   const payload = (await response.json()) as { access_token?: string };
   if (!payload.access_token) throw new Error("Shopify token exchange returned no access token.");
   return payload.access_token;
@@ -119,10 +125,20 @@ async function shopifyGraphQL(
 
 async function authenticate(request: Request, env: Env): Promise<{ shop: string; accessToken: string }> {
   const idToken = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
-  if (!idToken) throw new Error("Missing Shopify ID token.");
+  if (!idToken) throw new Error(INVALID_ID_TOKEN);
   const claims = await verifyIdToken(idToken, env);
   const shop = new URL(claims.dest!).hostname;
   return { shop, accessToken: await getAdminAccessToken(shop, idToken, env) };
+}
+
+function invalidSessionResponse(): Response {
+  return new Response(JSON.stringify({ error: "Invalid Shopify ID token." }), {
+    status: 401,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Shopify-Retry-Invalid-Session-Request": "1",
+    },
+  });
 }
 
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
@@ -139,7 +155,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const offers = raw ? JSON.parse(raw) as Offer[] : [];
     return Response.json({ offers });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Unable to load offers." }, { status: 401 });
+    if (error instanceof Error && error.message === INVALID_ID_TOKEN) return invalidSessionResponse();
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to load offers." }, { status: 502 });
   }
 };
 
@@ -177,6 +194,7 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     if (errors.length) throw new Error(errors.map((e: { message: string }) => e.message).join("; "));
     return Response.json({ ok: true, offers: body.offers });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Unable to save offers." }, { status: 401 });
+    if (error instanceof Error && error.message === INVALID_ID_TOKEN) return invalidSessionResponse();
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to save offers." }, { status: 502 });
   }
 };
