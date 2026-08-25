@@ -5,11 +5,11 @@ import "dotenv/config";
 
 const shopify = shopifyApp({
   api: {
-    apiVersion: ApiVersion.April25,
+    apiVersion: "2026-07" as ApiVersion,
     restResources: undefined,
     apiKey: process.env.SHOPIFY_API_KEY,
     apiSecretKey: process.env.SHOPIFY_API_SECRET!,
-    scopes: process.env.SCOPES?.split(","),
+    scopes: process.env.SCOPES?.split(",").map((scope) => scope.trim()).filter(Boolean),
     hostName: process.env.SHOPIFY_APP_URL?.replace(/https?:\/\//, ""),
   },
   auth: {
