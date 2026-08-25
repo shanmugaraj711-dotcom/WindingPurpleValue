@@ -1,10 +1,10 @@
 import { register } from "@shopify/web-pixels-extension";
 
-register(({ analytics, settings }) => {
+register(({ analytics, init, settings }) => {
   const apiBaseUrl = String(settings.api_base_url || "").replace(/\/$/, "");
   if (!apiBaseUrl) return;
 
-  const shop = typeof window !== "undefined" ? window.location.hostname : "";
+  const shop = String(init.data.shop?.domain || "");
   if (!shop.endsWith(".myshopify.com")) return;
 
   const send = (eventName: string, payload: Record<string, unknown>) => {
