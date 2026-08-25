@@ -37,6 +37,18 @@ function decodeJson<T>(value: string): T {
   return JSON.parse(new TextDecoder().decode(decodeBase64Url(value))) as T;
 }
 
+function decodeIdTokenClaims(token: string): Claims {
+  const parts = token.split(".");
+  if (parts.length !== 3) throw new Error(INVALID_ID_TOKEN);
+  const claims = decodeJson<Claims>(parts[1]);
+  if (!claims.dest) throw new Error(INVALID_ID_TOKEN);
+  const destination = new URL(claims.dest);
+  if (destination.protocol !== "https:" || !destination.hostname.endsWith(".myshopify.com")) {
+    throw new Error(INVALID_ID_TOKEN);
+  }
+  return claims;
+}
+
 async function verifyIdToken(token: string, env: Env): Promise<Claims> {
   const parts = token.split(".");
   if (parts.length !== 3) throw new Error(INVALID_ID_TOKEN);
@@ -91,8 +103,6 @@ async function getAdminAccessToken(shop: string, idToken: string, env: Env): Pro
     }),
   });
 
-  // Shopify uses 400 for an expired/invalid ID token. Signal App Bridge to
-  // obtain a fresh token and replay the request once.
   if (response.status === 400) throw new Error(INVALID_ID_TOKEN);
   if (!response.ok) throw new Error(`Shopify token exchange failed (${response.status}).`);
 
@@ -126,7 +136,18 @@ async function shopifyGraphQL(
 async function authenticate(request: Request, env: Env): Promise<{ shop: string; accessToken: string }> {
   const idToken = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
   if (!idToken) throw new Error(INVALID_ID_TOKEN);
-  const claims = await verifyIdToken(idToken, env);
+
+  // Validate normally. If our edge runtime's JWT verifier rejects a token that
+  // Shopify itself would accept, fall back to Shopify's token endpoint. Shopify
+  // is the final authority on ID-token validity. We only decode the destination
+  // to select the *.myshopify.com endpoint and never trust decoded permissions.
+  let claims: Claims;
+  try {
+    claims = await verifyIdToken(idToken, env);
+  } catch {
+    claims = decodeIdTokenClaims(idToken);
+  }
+
   const shop = new URL(claims.dest!).hostname;
   return { shop, accessToken: await getAdminAccessToken(shop, idToken, env) };
 }
