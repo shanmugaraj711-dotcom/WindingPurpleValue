@@ -1,25 +1,42 @@
 import { register } from "@shopify/web-pixels-extension";
 
-register(({ analytics, init }) => {
-  const apiBaseUrl = "https://windingpurplevalue.pages.dev";
-  const shop = String(init.data.shop?.domain || "");
-  if (!shop.endsWith(".myshopify.com")) return;
+const EVENT_NAMES = [
+  "page_viewed",
+  "product_viewed",
+  "product_added_to_cart",
+  "product_removed_from_cart",
+  "cart_viewed",
+  "checkout_started",
+  "checkout_completed",
+] as const;
 
-  const send = (eventName: string, payload: Record<string, unknown>) => {
-    const body = JSON.stringify({ event: eventName, shop, timestamp: Date.now(), payload });
+register(({ analytics, init, customerPrivacy }) => {
+  const apiBaseUrl = "https://windingpurplevalue.pages.dev";
+  const hostname = init.context.document.location?.hostname || "";
+  const shop = hostname.endsWith(".myshopify.com") ? hostname : "";
+  if (!shop) return;
+
+  let analyticsAllowed = init.customerPrivacy?.analyticsProcessingAllowed ?? true;
+  customerPrivacy.subscribe("visitorConsentCollected", (event) => {
+    analyticsAllowed = event.customerPrivacy.analyticsProcessingAllowed;
+  });
+
+  const send = (eventName: string, event: { id?: string; data?: unknown; timestamp?: string }) => {
+    if (!analyticsAllowed) return;
     fetch(`${apiBaseUrl}/api/analytics`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body,
+      body: JSON.stringify({
+        event: eventName,
+        shop,
+        timestamp: Date.parse(event.timestamp || "") || Date.now(),
+        payload: { id: event.id ?? null, data: event.data ?? null },
+      }),
       keepalive: true,
     }).catch(() => undefined);
   };
 
-  analytics.subscribe("page_viewed", (event) => send("page_viewed", { id: event.id }));
-  analytics.subscribe("product_viewed", (event) => send("product_viewed", { id: event.id }));
-  analytics.subscribe("product_added_to_cart", (event) => send("product_added_to_cart", { id: event.id }));
-  analytics.subscribe("product_removed_from_cart", (event) => send("product_removed_from_cart", { id: event.id }));
-  analytics.subscribe("cart_viewed", (event) => send("cart_viewed", { id: event.id }));
-  analytics.subscribe("checkout_started", (event) => send("checkout_started", { id: event.id }));
-  analytics.subscribe("checkout_completed", (event) => send("checkout_completed", { id: event.id }));
+  for (const eventName of EVENT_NAMES) {
+    analytics.subscribe(eventName, (event) => send(eventName, event));
+  }
 });
