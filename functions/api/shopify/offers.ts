@@ -96,8 +96,10 @@ async function getAdminAccessToken(shop: string, idToken: string, env: Env): Pro
       client_id: env.SHOPIFY_API_KEY,
       client_secret: env.SHOPIFY_API_SECRET,
       grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+      // Shopify's token-exchange subject token type uses the IETF identifier.
+      // Keep this identical to the working /api/shopify/shop exchange route.
       subject_token: idToken,
-      subject_token_type: "urn:shopify:params:oauth:token-type:id_token",
+      subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
       requested_token_type: "urn:shopify:params:oauth:token-type:offline-access-token",
       expiring: "1",
     }),
