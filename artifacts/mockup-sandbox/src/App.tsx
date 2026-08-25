@@ -15,12 +15,12 @@ function resolveComponent(mod: Record<string, unknown>, name: string): Component
 }
 
 function PreviewRenderer({ componentPath, modules }: { componentPath: string; modules: ModuleMap }) {
-  const [Component, setComponent] = useState<ComponentType | null>(null);
+  const [Component, setComponent] = useState<ComponentType | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     async function load(): Promise<void> {
-      setComponent(null); setError(null);
+      setComponent(undefined); setError(null);
       const loader = modules[`./components/mockups/${componentPath}.tsx`];
       if (!loader) { setError(`No component found at ${componentPath}.tsx`); return; }
       try {
