@@ -2,9 +2,9 @@
 
 ## Implemented
 
-CartLift now contains a Shopify Web Pixel app-extension source under `extensions/cartlift-pixel`.
+CartLift now contains the Shopify Web Pixel app-extension source under `extensions/cartlift-web-pixel`.
 
-The pixel subscribes to these Shopify standard events:
+The extension uses Shopify's `web_pixel_extension` format and subscribes to these Shopify standard events:
 
 - `page_viewed`
 - `product_viewed`
@@ -20,16 +20,16 @@ Events are sent to:
 
 The Cloudflare Pages endpoint already accepts these events and can persist per-shop counters when the `CARTLIFT_ANALYTICS_KV` binding is configured.
 
-## Required Shopify release step
+## Shopify activation flow
 
-Shopify requires the app to request:
+CartLift requests:
 
 - `write_pixels`
 - `read_customer_events`
 
-before the web pixel can be activated. Add those scopes to the CartLift app version in Shopify Dev Dashboard, include the `CartLift Shopper Analytics` web-pixel extension in the version, and release the version.
+The app's `/api/shopify/shop` endpoint now checks for an existing Shopify web pixel and automatically calls `webPixelCreate` with the CartLift analytics endpoint when no pixel exists. This removes the need for the merchant to create a Custom Pixel manually.
 
-After release, activate/configure the app pixel for the development store.
+The Shopify app version still must contain and release the `cartlift-web-pixel` extension before `webPixelCreate` can succeed. After the version is released, opening CartLift triggers the activation check automatically.
 
 ## Required Cloudflare step
 
@@ -37,12 +37,15 @@ Create/bind a Cloudflare KV namespace named `CARTLIFT_ANALYTICS_KV` to the produ
 
 ## Verification
 
-1. Open the development store storefront.
-2. Visit a product page.
-3. Add a product to cart.
-4. Open the cart.
-5. Start checkout if possible.
-6. Return to CartLift > Cart Insights.
-7. Verify the event counters are greater than zero.
+1. Release the Shopify app version containing `cartlift-web-pixel`.
+2. Open CartLift in the development store.
+3. Open Settings > Customer events and confirm the CartLift app pixel is present/connected.
+4. Open the development store storefront.
+5. Visit a product page.
+6. Add a product to cart.
+7. Open the cart.
+8. Start checkout if possible.
+9. Return to CartLift > Cart Insights.
+10. Verify the event counters are greater than zero.
 
 Do not use Replit for this workflow. The working project path is GitHub -> Cloudflare Pages -> Shopify.
