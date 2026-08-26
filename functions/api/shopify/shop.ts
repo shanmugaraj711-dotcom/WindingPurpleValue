@@ -103,66 +103,59 @@ async function ensureCartLiftWebPixel(
 ): Promise<{ connected: boolean; error?: string }> {
   const endpoint = "https://windingpurplevalue.pages.dev/api/analytics";
   const graphqlUrl = `https://${shop}/admin/api/${apiVersion}/graphql.json`;
-  const headers = {
-    "Content-Type": "application/json",
-    "X-Shopify-Access-Token": accessToken,
-  };
 
-  const existingResponse = await fetch(graphqlUrl, {
+  const response = await fetch(graphqlUrl, {
     method: "POST",
-    headers,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Shopify-Access-Token": accessToken,
+    },
     body: JSON.stringify({
-      query: "query CartLiftWebPixel { webPixel { id settings } }",
-    }),
-  });
-  if (!existingResponse.ok) {
-    return { connected: false, error: `Web pixel lookup failed (${existingResponse.status}).` };
-  }
-
-  const existingPayload = (await existingResponse.json()) as {
-    data?: { webPixel?: { id?: string; settings?: string } | null };
-    errors?: Array<{ message?: string }>;
-  };
-  if (existingPayload.errors?.length) {
-    return { connected: false, error: existingPayload.errors.map((item) => item.message ?? "Unknown Shopify error").join("; ") };
-  }
-  if (existingPayload.data?.webPixel) return { connected: true };
-
-  const createResponse = await fetch(graphqlUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      query: `mutation CartLiftWebPixelCreate($settings: String!) {
-        webPixelCreate(webPixel: { settings: $settings }) {
-          userErrors { field message }
+      query: `mutation CartLiftWebPixelCreate($webPixel: WebPixelInput!) {
+        webPixelCreate(webPixel: $webPixel) {
+          userErrors { field message code }
           webPixel { id settings }
         }
       }`,
-      variables: { settings: JSON.stringify({ endpoint }) },
+      variables: { webPixel: { settings: JSON.stringify({ endpoint }) } },
     }),
   });
-  if (!createResponse.ok) {
-    return { connected: false, error: `Web pixel activation failed (${createResponse.status}).` };
+
+  if (!response.ok) {
+    return { connected: false, error: `Web pixel activation failed (${response.status}).` };
   }
 
-  const createPayload = (await createResponse.json()) as {
+  const payload = (await response.json()) as {
     data?: {
       webPixelCreate?: {
-        userErrors?: Array<{ field?: string[]; message?: string }>;
+        userErrors?: Array<{ field?: string[]; message?: string; code?: string }>;
         webPixel?: { id?: string; settings?: string } | null;
       };
     };
     errors?: Array<{ message?: string }>;
   };
-  if (createPayload.errors?.length) {
-    return { connected: false, error: createPayload.errors.map((item) => item.message ?? "Unknown Shopify error").join("; ") };
+
+  if (payload.errors?.length) {
+    return {
+      connected: false,
+      error: payload.errors.map((item) => item.message ?? "Unknown Shopify error").join("; "),
+    };
   }
 
-  const result = createPayload.data?.webPixelCreate;
-  if (result?.userErrors?.length) {
-    return { connected: false, error: result.userErrors.map((item) => item.message ?? "Web pixel activation error").join("; ") };
+  const result = payload.data?.webPixelCreate;
+  if (result?.webPixel) return { connected: true };
+
+  const userErrors = result?.userErrors ?? [];
+  if (userErrors.some((item) => item.code === "TAKEN")) {
+    // Shopify allows only one app web pixel per app/store. TAKEN means the
+    // merchant already has the CartLift pixel record, so activation is done.
+    return { connected: true };
   }
-  return { connected: Boolean(result?.webPixel) };
+
+  return {
+    connected: false,
+    error: userErrors.map((item) => item.message ?? "Web pixel activation error").join("; ") || "Web pixel activation returned no pixel.",
+  };
 }
 
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
@@ -204,9 +197,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
       );
     }
 
-    // Shopify requires a webPixelCreate mutation after the app version containing
-    // the web-pixel extension has been released. Do this automatically when the
-    // CartLift app opens so merchants don't have to paste or maintain a custom pixel.
+    // Shopify requires webPixelCreate after the app version containing the
+    // extension has been released. Do this automatically when CartLift opens.
     const pixel = await ensureCartLiftWebPixel(shop, accessToken, apiVersion);
 
     return Response.json({ shop: payload.data?.shop ?? null, scope, pixel });
