@@ -13,9 +13,7 @@ function decodeBase64Url(value: string): Uint8Array {
   const binary = atob(padded);
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
-function decodeJson<T>(value: string): T {
-  return JSON.parse(new TextDecoder().decode(decodeBase64Url(value))) as T;
-}
+function decodeJson<T>(value: string): T { return JSON.parse(new TextDecoder().decode(decodeBase64Url(value))) as T; }
 function decodeDestination(token: string): Claims {
   const parts = token.split(".");
   if (parts.length !== 3) throw new Error(INVALID_ID_TOKEN);
@@ -45,15 +43,14 @@ async function verifyIdToken(token: string, env: Env): Promise<Claims> {
 async function getAdminAccessToken(shop: string, idToken: string, env: Env): Promise<string> {
   const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
     body: new URLSearchParams({
       client_id: env.SHOPIFY_API_KEY,
       client_secret: env.SHOPIFY_API_SECRET,
       grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
       subject_token: idToken,
       subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
-      requested_token_type: "urn:shopify:params:oauth:token-type:offline-access-token",
-      expiring: "1",
+      requested_token_type: "urn:shopify:params:oauth:token-type:online-access-token",
     }),
   });
   if (response.status === 400) throw new Error(INVALID_ID_TOKEN);
