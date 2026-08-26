@@ -1,5 +1,6 @@
 name = "CartLift Analytics"
 type = "web_pixel_extension"
+uid = "0d11b440-6461-3dbe-8ad0-baf51938940b32241d01"
 runtime_context = "strict"
 
 [customer_privacy]
