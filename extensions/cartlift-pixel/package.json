@@ -1,7 +1,0 @@
-{
-  "name": "cartlift-shopper-analytics",
-  "private": true,
-  "dependencies": {
-    "@shopify/web-pixels-extension": "latest"
-  }
-}
