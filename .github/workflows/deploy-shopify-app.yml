@@ -26,18 +26,11 @@ jobs:
       - name: Install web pixel extension dependencies
         run: npm install --prefix extensions/cartlift-web-pixel --ignore-scripts
 
-      - name: Restore Shopify project metadata
-        run: |
-          mkdir -p .shopify
-          cat > .shopify/project.json <<'EOF'
-          {
-            "appId": "520369128d8be7253ef412e4727333b7",
-            "title": "CartLift",
-            "orgId": "232482690"
-          }
-          EOF
+      - name: Validate production configuration
+        run: shopify app config validate --config production
 
       - name: Deploy app configuration and extensions
         env:
           SHOPIFY_APP_AUTOMATION_TOKEN: ${{ secrets.SHOPIFY_APP_AUTOMATION_TOKEN }}
+          SHOPIFY_FLAG_ORGANIZATION_ID: "232482690"
         run: shopify app deploy --config production --allow-updates --source-control-url "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}" --verbose
