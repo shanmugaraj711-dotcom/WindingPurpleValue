@@ -38,10 +38,18 @@ async function verifyIdToken(token: string, env: Env): Promise<Claims> {
   return claims;
 }
 
-async function exchangeForExpiringOfflineToken(shop: string, idToken: string, env: Env): Promise<{ accessToken: string; scope: string }> {
+async function exchangeForOnlineToken(shop: string, idToken: string, env: Env): Promise<{ accessToken: string; scope: string }> {
   const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
-    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: env.SHOPIFY_API_KEY.trim(), client_secret: env.SHOPIFY_API_SECRET.trim(), grant_type: "urn:ietf:params:oauth:grant-type:token-exchange", subject_token: idToken, subject_token_type: "urn:shopify:params:oauth:token-type:id_token", requested_token_type: "urn:shopify:params:oauth:token-type:offline-access-token", expiring: "1" }),
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+    body: new URLSearchParams({
+      client_id: env.SHOPIFY_API_KEY.trim(),
+      client_secret: env.SHOPIFY_API_SECRET.trim(),
+      grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+      subject_token: idToken,
+      subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
+      requested_token_type: "urn:shopify:params:oauth:token-type:online-access-token",
+    }),
   });
   if (response.status === 400) {
     let reason = "invalid_id_token";
@@ -70,8 +78,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   const idToken = authorization.replace(/^Bearer\s+/i, "").trim();
   if (!idToken) return Response.json({ error: "Missing Shopify ID token." }, { status: 401 });
   try {
-    const claims = await verifyIdToken(idToken, env); const shop = new URL(claims.dest!).hostname;
-    const { accessToken, scope } = await exchangeForExpiringOfflineToken(shop, idToken, env);
+    const claims = await verifyIdToken(idToken, env);
+    const shop = new URL(claims.dest!).hostname;
+    const { accessToken, scope } = await exchangeForOnlineToken(shop, idToken, env);
     const apiVersion = env.SHOPIFY_API_VERSION?.trim() || "2026-07";
     const adminResponse = await fetch(`https://${shop}/admin/api/${apiVersion}/graphql.json`, { method: "POST", headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": accessToken }, body: JSON.stringify({ query: `query CartLiftShopIdentity { shop { name myshopifyDomain } }` }) });
     if (!adminResponse.ok) return Response.json({ error: `Shopify Admin API failed (${adminResponse.status}).` }, { status: 502 });
@@ -82,7 +91,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("SHOPIFY_TOKEN_EXCHANGE_400:")) {
       const reason = error.message.slice("SHOPIFY_TOKEN_EXCHANGE_400:".length);
-      return new Response(JSON.stringify({ error: `Shopify token exchange rejected the ID token (${reason}).` }), { status: 401, headers: { "Content-Type": "application/json", "X-Shopify-Retry-Invalid-Session-Request": "1" } });
+      return new Response(JSON.stringify({ error: `Shopify online token exchange rejected the ID token (${reason}).` }), { status: 401, headers: { "Content-Type": "application/json", "X-Shopify-Retry-Invalid-Session-Request": "1" } });
     }
     return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Shopify authentication failed." }), { status: 401, headers: { "Content-Type": "application/json" } });
   }
