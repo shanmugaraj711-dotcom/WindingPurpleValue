@@ -10,8 +10,8 @@ const EVENT_NAMES = [
   "checkout_completed",
 ] as const;
 
-register(({ analytics, init, customerPrivacy }) => {
-  const apiBaseUrl = "https://windingpurplevalue.pages.dev";
+register(({ analytics, init, customerPrivacy, settings }) => {
+  const apiBaseUrl = String(settings?.endpoint || "https://windingpurplevalue.pages.dev/api/analytics");
   const hostname = init.context.document.location?.hostname || "";
   const shop = hostname.endsWith(".myshopify.com") ? hostname : "";
   if (!shop) return;
@@ -23,7 +23,7 @@ register(({ analytics, init, customerPrivacy }) => {
 
   const send = (eventName: string, event: { id?: string; data?: unknown; timestamp?: string }) => {
     if (!analyticsAllowed) return;
-    fetch(`${apiBaseUrl}/api/analytics`, {
+    fetch(apiBaseUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
