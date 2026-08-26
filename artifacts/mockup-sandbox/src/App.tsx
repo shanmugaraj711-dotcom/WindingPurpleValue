@@ -8,6 +8,8 @@ type Offer = { id: string; name: string; type: OfferType; value: number; minCart
 type Product = { id: string; title: string; status: string; totalInventory: number; priceRangeV2?: { minVariantPrice?: { amount: string; currencyCode: string }; maxVariantPrice?: { amount: string; currencyCode: string } } };
 type Analytics = { configured: boolean; events: Record<string, number>; total: number; lastEventAt?: number | null };
 
+type ShopifyBridge = { idToken?: () => Promise<string> };
+
 const DEFAULT_OFFERS: Offer[] = [{ id: "starter-offer", name: "10% off orders over ₹1,000", type: "percentage", value: 10, minCartValue: 1000, enabled: true, createdAt: new Date().toISOString() }];
 
 function resolveComponent(mod: Record<string, unknown>, name: string): ComponentType | undefined {
@@ -47,20 +49,36 @@ function offerText(offer: Offer): string {
   if (offer.type === "fixed") return `₹${offer.value.toLocaleString("en-IN")} off`;
   return "Free shipping";
 }
+
+async function shopifyIdToken(): Promise<string> {
+  const bridge = (window as Window & { shopify?: ShopifyBridge }).shopify;
+  if (!bridge?.idToken) throw new Error("Shopify App Bridge authentication is unavailable. Reopen CartLift from Shopify Admin.");
+  const token = await bridge.idToken();
+  if (!token) throw new Error("Shopify did not provide an ID token. Reopen CartLift from Shopify Admin.");
+  return token;
+}
+
+async function shopifyFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const token = await shopifyIdToken();
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${token}`);
+  return fetch(input, { ...init, headers });
+}
+
 async function offersApi(method: "GET" | "POST", offers?: Offer[]): Promise<Offer[]> {
-  const response = await fetch("/api/shopify/offers", { method, headers: method === "POST" ? { "Content-Type": "application/json" } : undefined, body: method === "POST" ? JSON.stringify({ offers }) : undefined, cache: "no-store" });
+  const response = await shopifyFetch("/api/shopify/offers", { method, headers: method === "POST" ? { "Content-Type": "application/json" } : undefined, body: method === "POST" ? JSON.stringify({ offers }) : undefined, cache: "no-store" });
   const payload = await response.json() as { offers?: Offer[]; error?: string };
   if (!response.ok) throw new Error(payload.error || `Offer API failed (${response.status}).`);
   return payload.offers ?? [];
 }
 async function productsApi(): Promise<Product[]> {
-  const response = await fetch("/api/shopify/products", { cache: "no-store" });
+  const response = await shopifyFetch("/api/shopify/products", { cache: "no-store" });
   const payload = await response.json() as { products?: Product[]; error?: string };
   if (!response.ok) throw new Error(payload.error || `Product API failed (${response.status}).`);
   return payload.products ?? [];
 }
 async function analyticsApi(): Promise<Analytics> {
-  const response = await fetch("/api/analytics", { cache: "no-store" });
+  const response = await shopifyFetch("/api/analytics", { cache: "no-store" });
   const payload = await response.json() as Analytics & { error?: string };
   if (!response.ok) throw new Error(payload.error || `Analytics API failed (${response.status}).`);
   return { configured: Boolean(payload.configured), events: payload.events ?? {}, total: payload.total ?? 0, lastEventAt: payload.lastEventAt ?? null };
@@ -87,7 +105,7 @@ function CartLiftApp() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/shopify/shop", { cache: "no-store" }).then(async (r) => {
+    shopifyFetch("/api/shopify/shop", { cache: "no-store" }).then(async (r) => {
       const p = await r.json() as ShopifyStatus & { error?: string };
       if (!r.ok) throw new Error(p.error || `Shopify connection failed (${r.status}).`);
       if (!cancelled) setStatus({ loading: false, connected: true, shop: p.shop, scope: p.scope });
