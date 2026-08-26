@@ -1,8 +1,8 @@
 # CartLift Shopify CLI app configuration.
-# The Shopify Dev Dashboard client ID must be linked with `shopify app config link`
-# before deploying this file to Shopify. Never commit the app secret.
+# The Shopify Dev Dashboard client ID is linked to this app.
+# Never commit the app secret.
 name = "CartLift"
-client_id = "REPLACE_WITH_SHOPIFY_CLIENT_ID"
+client_id = "520369128d8be7253ef412e4727333b7"
 application_url = "https://windingpurplevalue.pages.dev"
 embedded = true
 
