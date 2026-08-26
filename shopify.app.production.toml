@@ -2,6 +2,7 @@
 # Production deployment intentionally reuses the same Shopify app/client.
 name = "CartLift"
 client_id = "520369128d8be7253ef412e4727333b7"
+organization_id = 232482690
 application_url = "https://windingpurplevalue.pages.dev"
 embedded = true
 
