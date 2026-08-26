@@ -26,8 +26,23 @@ jobs:
       - name: Install web pixel extension dependencies
         run: npm install --prefix extensions/cartlift-web-pixel --ignore-scripts
 
-      # CI authentication is supplied by the Shopify App Automation Token.
+      - name: Reset Shopify CLI state and legacy auth
+        run: |
+          rm -rf .shopify
+          unset SHOPIFY_CLI_PARTNERS_TOKEN
+          unset SHOPIFY_CLI_AUTH_TOKEN
+          unset SHOPIFY_API_KEY
+          unset SHOPIFY_API_SECRET
+          echo "Shopify CLI state cleared and legacy auth variables unset."
+
+      # CI authentication is supplied only by the Shopify App Automation Token.
       - name: Deploy app configuration and extensions
         env:
           SHOPIFY_APP_AUTOMATION_TOKEN: ${{ secrets.SHOPIFY_APP_AUTOMATION_TOKEN }}
-        run: shopify app deploy --config production --allow-updates --source-control-url "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}" --verbose
+        run: |
+          if [ -z "$SHOPIFY_APP_AUTOMATION_TOKEN" ]; then
+            echo "ERROR: SHOPIFY_APP_AUTOMATION_TOKEN is empty or unavailable."
+            exit 1
+          fi
+          echo "SHOPIFY_APP_AUTOMATION_TOKEN is present."
+          shopify app deploy --config production --allow-updates --source-control-url "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}" --verbose
