@@ -117,7 +117,7 @@ async function ensureCartLiftWebPixel(
           webPixel { id settings }
         }
       }`,
-      variables: { webPixel: { settings: JSON.stringify({ endpoint }) } },
+      variables: { webPixel: { settings: { endpoint } } },
     }),
   });
 
