@@ -10,7 +10,7 @@
   const money = (amount, currency) => new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount);
   const thresholdFor = (currency) => ({ INR: 1000, USD: 50, EUR: 50, GBP: 50, AUD: 75, CAD: 75, SGD: 75 })[currency] || 50;
 
-  root.hidden = false;
+  root.hidden = true;
   root.innerHTML = `
     <div class="cartlift-card" role="status" aria-live="polite">
       <div class="cartlift-heading"><span>CartLift</span><button class="cartlift-close" type="button" aria-label="Close">×</button></div>
@@ -31,6 +31,8 @@
   const addButton = root.querySelector(".cartlift-add");
   const closeButton = root.querySelector(".cartlift-close");
   let currentRecommendation = null;
+  let loading = false;
+  let reloadTimer = null;
 
   closeButton.addEventListener("click", () => { root.hidden = true; });
 
@@ -58,18 +60,23 @@
     const remaining = Math.max(0, threshold - subtotal);
     const percent = Math.min(100, Math.round((subtotal / threshold) * 100));
     progress.style.width = `${percent}%`;
-    if (remaining > 0) {
-      message.textContent = `Add ${money(remaining, currency)} more for free shipping`;
-    } else {
-      message.textContent = "🎉 You unlocked free shipping";
-    }
+    message.textContent = remaining > 0
+      ? `Add ${money(remaining, currency)} more for free shipping`
+      : "🎉 You unlocked free shipping";
     card.dataset.empty = cart.item_count ? "false" : "true";
   }
 
   async function load() {
+    if (loading) return;
+    loading = true;
     try {
       const cart = await getCart();
-      if (!cart.item_count) { root.hidden = true; return; }
+      if (!cart.item_count) {
+        root.hidden = true;
+        currentRecommendation = null;
+        recommendation.hidden = true;
+        return;
+      }
       root.hidden = false;
       renderCart(cart);
       currentRecommendation = await getRecommendation(cart);
@@ -83,7 +90,14 @@
       }
     } catch (_) {
       root.hidden = true;
+    } finally {
+      loading = false;
     }
+  }
+
+  function scheduleLoad() {
+    clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(load, 180);
   }
 
   addButton.addEventListener("click", async () => {
@@ -110,9 +124,33 @@
     }
   });
 
-  document.addEventListener("cart:updated", load);
-  document.addEventListener("cart:refresh", load);
-  window.addEventListener("cart:change", load);
-  window.addEventListener("pageshow", load);
+  document.addEventListener("cart:updated", scheduleLoad);
+  document.addEventListener("cart:refresh", scheduleLoad);
+  document.addEventListener("cart:change", scheduleLoad);
+  window.addEventListener("cart:change", scheduleLoad);
+  window.addEventListener("pageshow", scheduleLoad);
+
+  // Detect Shopify Ajax Cart API calls even when the theme does not emit a cart event.
+  const originalFetch = window.fetch;
+  window.fetch = function(input, init) {
+    const requestUrl = typeof input === "string" ? input : input?.url || "";
+    const result = originalFetch.apply(this, arguments);
+    if (/\/cart\/(add|change|update|clear)(\.js)?(?:[?#]|$)/.test(requestUrl)) {
+      result.then(() => scheduleLoad()).catch(() => {});
+    }
+    return result;
+  };
+
+  const originalOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url) {
+    this.__cartliftCartRequest = typeof url === "string" && /\/cart\/(add|change|update|clear)(\.js)?(?:[?#]|$)/.test(url);
+    return originalOpen.apply(this, arguments);
+  };
+  const originalSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function() {
+    if (this.__cartliftCartRequest) this.addEventListener("load", scheduleLoad, { once: true });
+    return originalSend.apply(this, arguments);
+  };
+
   load();
 })();
