@@ -24,16 +24,28 @@ function decodeJson<T>(value: string): T {
 }
 
 async function verifyIdToken(token: string, env: Env): Promise<Claims> {
-  const parts = token.split(".");
-  if (parts.length !== 3) throw new Error("Invalid Shopify ID token.");
+  const parts = token.trim().split(".");
+  if (parts.length !== 3) throw new Error("Invalid Shopify ID token format.");
 
   const [encodedHeader, encodedPayload, encodedSignature] = parts;
-  const header = decodeJson<{ alg?: string }>(encodedHeader);
+  let header: { alg?: string };
+  let claims: Claims;
+  try {
+    header = decodeJson<{ alg?: string }>(encodedHeader);
+    claims = decodeJson<Claims>(encodedPayload);
+  } catch {
+    throw new Error("Invalid Shopify ID token encoding.");
+  }
+
   if (header.alg !== "HS256") throw new Error("Unsupported Shopify ID token algorithm.");
+
+  const clientId = env.SHOPIFY_API_KEY.trim();
+  const clientSecret = env.SHOPIFY_API_SECRET.trim();
+  if (!clientId || !clientSecret) throw new Error("Shopify API credentials are missing in the deployed environment.");
 
   const secret = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(env.SHOPIFY_API_SECRET),
+    new TextEncoder().encode(clientSecret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["verify"],
@@ -45,13 +57,12 @@ async function verifyIdToken(token: string, env: Env): Promise<Claims> {
     decodeBase64Url(encodedSignature),
     new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`),
   );
-  if (!validSignature) throw new Error("Invalid Shopify ID token signature.");
+  if (!validSignature) throw new Error("Invalid Shopify ID token signature (check SHOPIFY_API_SECRET).");
 
-  const claims = decodeJson<Claims>(encodedPayload);
   const now = Math.floor(Date.now() / 1000);
   if (!claims.exp || claims.exp <= now) throw new Error("Shopify ID token has expired.");
   if (claims.nbf && claims.nbf > now) throw new Error("Shopify ID token is not active yet.");
-  if (claims.aud !== env.SHOPIFY_API_KEY) throw new Error("Shopify ID token audience mismatch.");
+  if (claims.aud !== clientId) throw new Error("Shopify ID token audience mismatch (check SHOPIFY_API_KEY).");
   if (!claims.dest) throw new Error("Shopify ID token destination is missing.");
 
   const destination = new URL(claims.dest);
@@ -61,9 +72,7 @@ async function verifyIdToken(token: string, env: Env): Promise<Claims> {
 
   if (claims.iss) {
     const issuer = new URL(claims.iss);
-    if (issuer.hostname !== destination.hostname) {
-      throw new Error("Shopify ID token issuer mismatch.");
-    }
+    if (issuer.hostname !== destination.hostname) throw new Error("Shopify ID token issuer mismatch.");
   }
 
   return claims;
@@ -78,8 +87,8 @@ async function exchangeForExpiringOfflineToken(
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: env.SHOPIFY_API_KEY,
-      client_secret: env.SHOPIFY_API_SECRET,
+      client_id: env.SHOPIFY_API_KEY.trim(),
+      client_secret: env.SHOPIFY_API_SECRET.trim(),
       grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
       subject_token: idToken,
       subject_token_type: "urn:shopify:params:oauth:token-type:id_token",
@@ -121,102 +130,56 @@ async function ensureCartLiftWebPixel(
     }),
   });
 
-  if (!response.ok) {
-    return { connected: false, error: `Web pixel activation failed (${response.status}).` };
-  }
+  if (!response.ok) return { connected: false, error: `Web pixel activation failed (${response.status}).` };
 
   const payload = (await response.json()) as {
-    data?: {
-      webPixelCreate?: {
-        userErrors?: Array<{ field?: string[]; message?: string; code?: string }>;
-        webPixel?: { id?: string; settings?: string } | null;
-      };
-    };
+    data?: { webPixelCreate?: { userErrors?: Array<{ field?: string[]; message?: string; code?: string }>; webPixel?: { id?: string; settings?: string } | null } };
     errors?: Array<{ message?: string }>;
   };
-
-  if (payload.errors?.length) {
-    return {
-      connected: false,
-      error: payload.errors.map((item) => item.message ?? "Unknown Shopify error").join("; "),
-    };
-  }
+  if (payload.errors?.length) return { connected: false, error: payload.errors.map((item) => item.message ?? "Unknown Shopify error").join("; ") };
 
   const result = payload.data?.webPixelCreate;
   if (result?.webPixel) return { connected: true };
-
   const userErrors = result?.userErrors ?? [];
-  if (userErrors.some((item) => item.code === "TAKEN")) {
-    // Shopify allows only one app web pixel per app/store. TAKEN means the
-    // merchant already has the CartLift pixel record, so activation is done.
-    return { connected: true };
-  }
-
-  return {
-    connected: false,
-    error: userErrors.map((item) => item.message ?? "Web pixel activation error").join("; ") || "Web pixel activation returned no pixel.",
-  };
+  if (userErrors.some((item) => item.code === "TAKEN")) return { connected: true };
+  return { connected: false, error: userErrors.map((item) => item.message ?? "Web pixel activation error").join("; ") || "Web pixel activation returned no pixel." };
 }
 
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   const authorization = request.headers.get("Authorization") ?? "";
   const idToken = authorization.replace(/^Bearer\s+/i, "").trim();
-
   if (!idToken) return Response.json({ error: "Missing Shopify ID token." }, { status: 401 });
 
   try {
     const claims = await verifyIdToken(idToken, env);
     const shop = new URL(claims.dest!).hostname;
     const { accessToken, scope } = await exchangeForExpiringOfflineToken(shop, idToken, env);
-    const apiVersion = env.SHOPIFY_API_VERSION || "2026-07";
+    const apiVersion = env.SHOPIFY_API_VERSION?.trim() || "2026-07";
 
     const adminResponse = await fetch(`https://${shop}/admin/api/${apiVersion}/graphql.json`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": accessToken,
-      },
-      body: JSON.stringify({
-        query: `query CartLiftShopIdentity { shop { name myshopifyDomain } }`,
-      }),
+      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": accessToken },
+      body: JSON.stringify({ query: `query CartLiftShopIdentity { shop { name myshopifyDomain } }` }),
     });
 
-    if (!adminResponse.ok) {
-      return Response.json({ error: `Shopify Admin API failed (${adminResponse.status}).` }, { status: 502 });
-    }
+    if (!adminResponse.ok) return Response.json({ error: `Shopify Admin API failed (${adminResponse.status}).` }, { status: 502 });
 
-    const payload = (await adminResponse.json()) as {
-      data?: { shop?: { name?: string; myshopifyDomain?: string } };
-      errors?: Array<{ message?: string }>;
-    };
+    const payload = (await adminResponse.json()) as { data?: { shop?: { name?: string; myshopifyDomain?: string } }; errors?: Array<{ message?: string }> };
+    if (payload.errors?.length) return Response.json({ error: payload.errors.map((item) => item.message ?? "Unknown Shopify error").join("; ") }, { status: 502 });
 
-    if (payload.errors?.length) {
-      return Response.json(
-        { error: payload.errors.map((item) => item.message ?? "Unknown Shopify error").join("; ") },
-        { status: 502 },
-      );
-    }
-
-    // Shopify requires webPixelCreate after the app version containing the
-    // extension has been released. Do this automatically when CartLift opens.
     const pixel = await ensureCartLiftWebPixel(shop, accessToken, apiVersion);
-
     return Response.json({ shop: payload.data?.shop ?? null, scope, pixel });
   } catch (error) {
-    const invalidSession = error instanceof Error && error.message === "INVALID_ID_TOKEN";
-    if (invalidSession) {
+    if (error instanceof Error && error.message === "INVALID_ID_TOKEN") {
       return new Response(JSON.stringify({ error: "Invalid Shopify ID token." }), {
         status: 401,
-        headers: {
-          "Content-Type": "application/json",
-          "X-Shopify-Retry-Invalid-Session-Request": "1",
-        },
+        headers: { "Content-Type": "application/json", "X-Shopify-Retry-Invalid-Session-Request": "1" },
       });
     }
 
-    return Response.json(
-      { error: error instanceof Error ? error.message : "Shopify authentication failed." },
-      { status: 401 },
-    );
+    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Shopify authentication failed." }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 };
