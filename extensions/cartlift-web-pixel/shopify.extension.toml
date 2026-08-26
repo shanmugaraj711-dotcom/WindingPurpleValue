@@ -8,5 +8,16 @@ marketing = false
 preferences = false
 sale_of_data = "disabled"
 
+[settings]
+type = "object"
+
+[settings.fields.endpoint]
+name = "Analytics endpoint"
+description = "CartLift analytics endpoint used by the web pixel."
+type = "single_line_text_field"
+validations = [
+  { name = "min", value = "1" }
+]
+
 [capabilities]
 network_access = true
