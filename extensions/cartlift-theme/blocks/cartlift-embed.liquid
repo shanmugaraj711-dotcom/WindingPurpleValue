@@ -5,9 +5,9 @@
 {% endcomment %}
 
 <div
-  id="cartlift-root"
+  id="cartlift-widget-root"
   data-cartlift="v1"
-  data-free-shipping-threshold="{{ block.settings.free_shipping_threshold | times: 100 }}"
+  data-goal="{{ block.settings.free_shipping_threshold | times: 100 }}"
   hidden
 ></div>
 
@@ -15,7 +15,7 @@
 {
   "name": "CartLift",
   "target": "body",
-  "javascript": "cartlift.js",
+  "javascript": "cartlift-widget.js",
   "stylesheet": "cartlift.css",
   "settings": [
     {
