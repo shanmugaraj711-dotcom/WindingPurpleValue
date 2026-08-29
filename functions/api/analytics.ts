@@ -34,6 +34,40 @@ function verifyIdToken(token: string, env: AnalyticsEnv): Claims {
 function response(status: number, body: unknown): Response {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type,Authorization" } });
 }
+function rate(numerator: number, denominator: number): number {
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) return 0;
+  return Math.round((numerator / denominator) * 1000) / 10;
+}
+function buildInsights(events: Record<string, number>, sessions: number) {
+  const pageViews = events.page_viewed ?? 0;
+  const productViews = events.product_viewed ?? 0;
+  const addToCarts = events.product_added_to_cart ?? 0;
+  const cartViews = events.cart_viewed ?? 0;
+  const checkoutStarts = events.checkout_started ?? 0;
+  const checkoutCompletions = events.checkout_completed ?? 0;
+  const removals = events.product_removed_from_cart ?? 0;
+
+  return {
+    funnel: {
+      pageViews,
+      productViews,
+      addToCarts,
+      cartViews,
+      checkoutStarts,
+      checkoutCompletions,
+    },
+    rates: {
+      productViewRate: rate(productViews, pageViews),
+      addToCartRate: rate(addToCarts, productViews),
+      cartViewRate: rate(cartViews, addToCarts),
+      checkoutStartRate: rate(checkoutStarts, cartViews),
+      checkoutCompletionRate: rate(checkoutCompletions, checkoutStarts),
+      sessionCheckoutRate: rate(checkoutCompletions, sessions),
+      removalRate: rate(removals, addToCarts),
+    },
+    sessions,
+  };
+}
 export const onRequestOptions: PagesFunction<AnalyticsEnv> = async () => response(204, null);
 
 export const onRequestPost: PagesFunction<AnalyticsEnv> = async ({ request, env }) => {
@@ -87,11 +121,19 @@ export const onRequestGet: PagesFunction<AnalyticsEnv> = async ({ request, env }
     if (!idToken) throw new Error(INVALID_ID_TOKEN);
     const claims = verifyIdToken(idToken, env);
     const shop = new URL(claims.dest!).hostname;
-    if (!env.CARTLIFT_ANALYTICS_KV) return response(200, { configured: false, events: {}, total: 0, sessions: 0 });
+    if (!env.CARTLIFT_ANALYTICS_KV) return response(200, { configured: false, events: {}, total: 0, sessions: 0, insights: buildInsights({}, 0) });
     const data = await env.CARTLIFT_ANALYTICS_KV.get(`analytics:${shop}`, "json") as AnalyticsRecord | null;
     const events = data?.events ?? {};
+    const sessions = data?.sessions ?? 0;
     const total = data?.total ?? Object.values(events).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
-    return response(200, { configured: true, events, total, sessions: data?.sessions ?? 0, lastEventAt: data?.lastEventAt ?? null });
+    return response(200, {
+      configured: true,
+      events,
+      total,
+      sessions,
+      insights: buildInsights(events, sessions),
+      lastEventAt: data?.lastEventAt ?? null,
+    });
   } catch (error) {
     if (error instanceof Error && error.message === INVALID_ID_TOKEN) return response(401, { error: "Invalid Shopify ID token." });
     return response(502, { error: "Unable to load analytics." });
