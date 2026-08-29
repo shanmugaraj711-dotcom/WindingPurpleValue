@@ -40,6 +40,16 @@ async function exchange(idToken: string, shop: string, env: Env): Promise<string
 }
 function invalidSessionResponse(): Response { return new Response(JSON.stringify({ error: "Invalid Shopify ID token." }), { status: 401, headers: { "Content-Type": "application/json", "X-Shopify-Retry-Invalid-Session-Request": "1" } }); }
 
+const ANALYTICS_ENDPOINT = "https://windingpurplevalue.pages.dev/api/analytics";
+const PIXEL_SETTINGS = { endpoint: ANALYTICS_ENDPOINT };
+
+async function pixelMutation(shop: string, accessToken: string, apiVersion: string, query: string, variables: Record<string, unknown>): Promise<unknown> {
+  const response = await fetch(`https://${shop}/admin/api/${apiVersion}/graphql.json`, { method: "POST", headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": accessToken }, body: JSON.stringify({ query, variables }) });
+  const payload = await response.json() as { data?: unknown; errors?: Array<{ message?: string }> };
+  if (payload.errors?.length) throw new Error(payload.errors.map((e) => e.message || "Shopify GraphQL error").join("; "));
+  return payload.data;
+}
+
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   try {
     const idToken = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
@@ -48,10 +58,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const shop = new URL(claims.dest!).hostname;
     const accessToken = await exchange(idToken, shop, env);
     const apiVersion = env.SHOPIFY_API_VERSION || "2026-07";
-    const response = await fetch(`https://${shop}/admin/api/${apiVersion}/graphql.json`, { method: "POST", headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": accessToken }, body: JSON.stringify({ query: "query CartLiftWebPixel { webPixel { id settings } }" }) });
-    const payload = await response.json() as { data?: { webPixel?: { id?: string; settings?: string } | null }; errors?: Array<{ message?: string }> };
-    if (payload.errors?.length) throw new Error(payload.errors.map((e) => e.message || "Shopify GraphQL error").join("; "));
-    return Response.json({ connected: Boolean(payload.data?.webPixel), webPixel: payload.data?.webPixel ?? null });
+    const data = await pixelMutation(shop, accessToken, apiVersion, "query CartLiftWebPixel { webPixel { id settings } }", {} ) as { webPixel?: { id?: string; settings?: string } | null };
+    return Response.json({ connected: Boolean(data.webPixel), webPixel: data.webPixel ?? null });
   } catch (error) {
     if (error instanceof Error && error.message === INVALID_ID_TOKEN) return invalidSessionResponse();
     return Response.json({ error: error instanceof Error ? error.message : "Unable to inspect web pixel." }, { status: 502 });
@@ -66,11 +74,13 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     const shop = new URL(claims.dest!).hostname;
     const accessToken = await exchange(idToken, shop, env);
     const apiVersion = env.SHOPIFY_API_VERSION || "2026-07";
-    const response = await fetch(`https://${shop}/admin/api/${apiVersion}/graphql.json`, { method: "POST", headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": accessToken }, body: JSON.stringify({ query: "mutation CartLiftWebPixelCreate($settings: String!) { webPixelCreate(webPixel: { settings: $settings }) { userErrors { field message } webPixel { id settings } } }", variables: { settings: "{}" } }) });
-    const payload = await response.json() as { data?: { webPixelCreate?: { userErrors?: Array<{ field?: string[]; message?: string }>; webPixel?: { id?: string; settings?: string } | null } }; errors?: Array<{ message?: string }> };
-    if (payload.errors?.length) throw new Error(payload.errors.map((e) => e.message || "Shopify GraphQL error").join("; "));
-    const result = payload.data?.webPixelCreate;
-    if (result?.userErrors?.length) return Response.json({ error: result.userErrors.map((e) => e.message || "Web pixel error").join("; ") }, { status: 400 });
+    const data = await pixelMutation(shop, accessToken, apiVersion, "mutation CartLiftWebPixelCreate($webPixel: WebPixelInput!) { webPixelCreate(webPixel: $webPixel) { userErrors { field message code } webPixel { id settings } } }", { webPixel: { settings: PIXEL_SETTINGS } }) as { webPixelCreate?: { userErrors?: Array<{ field?: string[]; message?: string; code?: string }>; webPixel?: { id?: string; settings?: string } | null } };
+    const result = data.webPixelCreate;
+    if (result?.userErrors?.length) {
+      const taken = result.userErrors.some((error) => error.code === "TAKEN");
+      if (taken) return Response.json({ connected: true, webPixel: null, alreadyConnected: true });
+      return Response.json({ error: result.userErrors.map((e) => e.message || "Web pixel error").join("; ") }, { status: 400 });
+    }
     return Response.json({ connected: Boolean(result?.webPixel), webPixel: result?.webPixel ?? null });
   } catch (error) {
     if (error instanceof Error && error.message === INVALID_ID_TOKEN) return invalidSessionResponse();
