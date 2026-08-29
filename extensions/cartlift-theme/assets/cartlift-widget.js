@@ -43,9 +43,11 @@
   function getCartDrawer() {
     const selectors = [
       'cart-drawer',
+      'cart-drawer-component',
       '#CartDrawer',
       '.cart-drawer',
-      '[data-cart-drawer]'
+      '[data-cart-drawer]',
+      '[role="dialog"][aria-modal="true"]'
     ];
 
     for (const selector of selectors) {
@@ -54,6 +56,7 @@
       const styles = window.getComputedStyle(element);
       const open = element.hasAttribute('open') ||
         element.getAttribute('aria-hidden') === 'false' ||
+        element.getAttribute('aria-modal') === 'true' ||
         element.classList.contains('active') ||
         element.classList.contains('open') ||
         element.classList.contains('animate');
@@ -63,27 +66,22 @@
   }
 
   async function dispatchCartDrawerView() {
-    if (window.location.pathname === '/cart') return;
+    if (window.location.pathname === '/cart' || drawerWasOpen) return;
 
-    const drawer = getCartDrawer();
-    if (!drawer || drawerWasOpen) return;
+    const cart = await getCart().catch(() => null);
+    if (!cart) return;
     drawerWasOpen = true;
 
     try {
-      const cart = await getCart();
-      // Shopify does not allow themes/apps to publish standard customer
-      // events such as cart_viewed. Publish a namespaced custom event instead;
-      // the CartLift app pixel subscribes to this event and records it as the
-      // CartLift cart_viewed metric.
       const publish = window.Shopify?.analytics?.publish;
-      if (typeof publish !== 'function') return;
-
-      await Promise.resolve(publish('cartlift:cart_drawer_viewed', {
-        context: 'dialog',
-        item_count: cart.item_count,
-        total_price: cart.total_price,
-        currency: cart.currency,
-      }));
+      if (typeof publish === 'function') {
+        await Promise.resolve(publish('cartlift:cart_drawer_viewed', {
+          context: 'dialog',
+          item_count: cart.item_count,
+          total_price: cart.total_price,
+          currency: cart.currency,
+        }));
+      }
     } catch {
       // Cart-view analytics must never interfere with the storefront.
     }
@@ -92,10 +90,18 @@
   function checkCartDrawer() {
     clearTimeout(drawerCheckTimer);
     drawerCheckTimer = setTimeout(async () => {
-      const open = Boolean(getCartDrawer());
-      if (open) await dispatchCartDrawerView();
-      else drawerWasOpen = false;
-    }, 80);
+      if (getCartDrawer()) {
+        await dispatchCartDrawerView();
+      } else {
+        drawerWasOpen = false;
+      }
+    }, 120);
+  }
+
+  function checkCartDrawerSoon() {
+    [80, 180, 350, 650].forEach((delay) => {
+      window.setTimeout(checkCartDrawer, delay);
+    });
   }
 
   async function render() {
@@ -141,12 +147,12 @@
 
   document.addEventListener('click', (event) => {
     const trigger = event.target.closest?.(
-      'a[href*="/cart"], button[aria-controls*="CartDrawer"], [data-cart-toggle], [data-cart-drawer-toggle], .cart-icon-bubble'
+      'a[href*="/cart"], button[aria-controls*="CartDrawer"], [data-cart-toggle], [data-cart-drawer-toggle], .cart-icon-bubble, [aria-label*="cart" i]'
     );
-    if (trigger) checkCartDrawer();
+    if (trigger) checkCartDrawerSoon();
   }, true);
 
   const observer = new MutationObserver(checkCartDrawer);
   observer.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ['open', 'class', 'aria-hidden'] });
-  window.addEventListener('pageshow', checkCartDrawer);
+  window.addEventListener('pageshow', checkCartDrawerSoon);
 })();
