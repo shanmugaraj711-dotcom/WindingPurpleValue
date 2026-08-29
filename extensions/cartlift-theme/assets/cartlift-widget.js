@@ -37,6 +37,13 @@
     document.dispatchEvent(new CustomEvent('cart:refresh'));
   }
 
+  function publishDrawerView() {
+    if (window.location.pathname === '/cart') return;
+    const publish = window.Shopify?.analytics?.publish;
+    if (typeof publish !== 'function') return;
+    Promise.resolve(publish('cartlift:cart_drawer_viewed', { source: 'shopify:cart:view' })).catch(() => undefined);
+  }
+
   async function render() {
     try {
       const cart = await getCart();
@@ -71,4 +78,9 @@
   render();
   document.addEventListener('cart:refresh', render);
   document.addEventListener('shopify:section:load', render);
+  document.addEventListener('shopify:cart:lines-update', render);
+  document.addEventListener('shopify:cart:view', () => {
+    publishDrawerView();
+    render();
+  });
 })();
