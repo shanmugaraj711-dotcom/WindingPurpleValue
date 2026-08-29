@@ -12,6 +12,7 @@ const EVENT_NAMES = [
 
 type PixelEvent = {
   id?: string;
+  name?: string;
   data?: unknown;
   customData?: unknown;
   timestamp?: string;
@@ -28,8 +29,6 @@ register(({ analytics, init, customerPrivacy, settings }) => {
     analyticsAllowed = event.customerPrivacy.analyticsProcessingAllowed;
   });
 
-  // A short-lived session identifier lets CartLift calculate funnel metrics
-  // without collecting customer identity. It is generated per pixel runtime.
   const sessionId = (() => {
     try { return crypto.randomUUID(); }
     catch { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
@@ -65,8 +64,12 @@ register(({ analytics, init, customerPrivacy, settings }) => {
     analytics.subscribe(eventName, (event) => send(eventName, event));
   }
 
-  // Compatibility fallback for themes that do not emit Shopify's standard
-  // cart:view event for a cart drawer. The theme embed publishes this custom
-  // event only after it confirms the drawer is actually open.
-  analytics.subscribe("cartlift:cart_drawer_viewed", (event) => send("cart_viewed", event));
+  // Shopify custom customer events are also exposed through all_custom_events.
+  // Using that stream makes the cart-drawer compatibility event resilient to
+  // custom-event name normalization across Shopify pixel runtime versions.
+  analytics.subscribe("all_custom_events", (event) => {
+    const name = String(event.name || "");
+    const customEvent = name === "cartlift:cart_drawer_viewed" || name === "cart_drawer_viewed";
+    if (customEvent) send("cart_viewed", event);
+  });
 });
