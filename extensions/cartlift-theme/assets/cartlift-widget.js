@@ -8,7 +8,7 @@
     catch { return `$${(cents / 100).toFixed(2)}`; }
   };
 
-  const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const escapeHtml = (value) => String(value ?? '').replace(/[&<>\"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));
 
   async function getCart() {
     const r = await fetch('/cart.js', { headers: { Accept: 'application/json' }, cache: 'no-store' });
@@ -66,32 +66,24 @@
     if (window.location.pathname === '/cart') return;
 
     const drawer = getCartDrawer();
-    if (!drawer) return;
-    if (drawerWasOpen) return;
+    if (!drawer || drawerWasOpen) return;
     drawerWasOpen = true;
 
     try {
       const cart = await getCart();
-      const { CartViewEvent } = window.StandardEvents || {};
-
-      if (CartViewEvent) {
-        drawer.dispatchEvent(new CartViewEvent({
-          context: 'dialog',
-          cart: CartViewEvent.createCartFromAjaxResponse(cart),
-        }));
-        return;
-      }
-
-      // Fallback for themes that don't expose Shopify's StandardEvents helper.
+      // Shopify does not allow themes/apps to publish standard customer
+      // events such as cart_viewed. Publish a namespaced custom event instead;
+      // the CartLift app pixel subscribes to this event and records it as the
+      // CartLift cart_viewed metric.
       const publish = window.Shopify?.analytics?.publish;
-      if (typeof publish === 'function') {
-        Promise.resolve(publish('cartlift:cart_drawer_viewed', {
-          context: 'dialog',
-          item_count: cart.item_count,
-          total_price: cart.total_price,
-          currency: cart.currency,
-        })).catch(() => undefined);
-      }
+      if (typeof publish !== 'function') return;
+
+      await Promise.resolve(publish('cartlift:cart_drawer_viewed', {
+        context: 'dialog',
+        item_count: cart.item_count,
+        total_price: cart.total_price,
+        currency: cart.currency,
+      }));
     } catch {
       // Cart-view analytics must never interfere with the storefront.
     }
@@ -142,9 +134,6 @@
   document.addEventListener('shopify:section:load', render);
   document.addEventListener('shopify:cart:lines-update', render);
 
-  // Shopify's standard storefront cart:view event is the preferred signal.
-  // Some older themes do not dispatch it, so observe the drawer state as a
-  // compatibility fallback and emit a real StandardEvents CartViewEvent.
   document.addEventListener('shopify:cart:view', () => {
     drawerWasOpen = true;
     render();
