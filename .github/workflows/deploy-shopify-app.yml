@@ -6,11 +6,15 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    timeout-minutes: 15
+    env:
+      SHOPIFY_APP_AUTOMATION_TOKEN: ${{ secrets.SHOPIFY_APP_AUTOMATION_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -18,41 +22,30 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
 
       - name: Install Shopify CLI
         run: npm install -g @shopify/cli@4.6.1
 
-      - name: Install web pixel extension dependencies
+      - name: Install web pixel dependencies
         run: npm install --prefix extensions/cartlift-web-pixel --ignore-scripts
 
-      - name: Reset Shopify CLI state and legacy auth
+      - name: Verify production config
         run: |
-          rm -rf .shopify
-          unset SHOPIFY_CLI_PARTNERS_TOKEN
-          unset SHOPIFY_CLI_AUTH_TOKEN
-          unset SHOPIFY_API_KEY
-          unset SHOPIFY_API_SECRET
-          echo "Shopify CLI state cleared and legacy auth variables unset."
+          test -f shopify.app.production.toml
+          grep -q '^client_id = "520369128d0be7253ef412e4727333b7"' shopify.app.production.toml
+          grep -q '^application_url = "https://windingpurplevalue.pages.dev"' shopify.app.production.toml
+          grep -q '^scopes = "read_products"' shopify.app.production.toml
+          echo "CartLift production config verified."
 
-      - name: Ensure required Shopify webhook configuration
-        run: |
-          grep -q '^\[webhooks\]' shopify.app.production.toml || cat >> shopify.app.production.toml <<'EOF'
-
-[webhooks]
-api_version = "2026-07"
-EOF
-          echo "Required webhook configuration present."
-
-      # CI authentication is supplied only by the Shopify App Automation Token.
-      # Keep this workflow triggerable from main after production config changes.
-      - name: Deploy app configuration and extensions
-        env:
-          SHOPIFY_APP_AUTOMATION_TOKEN: ${{ secrets.SHOPIFY_APP_AUTOMATION_TOKEN }}
+      - name: Deploy CartLift app and extensions
         run: |
           if [ -z "$SHOPIFY_APP_AUTOMATION_TOKEN" ]; then
-            echo "ERROR: SHOPIFY_APP_AUTOMATION_TOKEN is empty or unavailable."
+            echo "ERROR: SHOPIFY_APP_AUTOMATION_TOKEN is unavailable."
             exit 1
           fi
-          echo "SHOPIFY_APP_AUTOMATION_TOKEN is present."
-          shopify app deploy --config production --allow-updates --source-control-url "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}" --verbose
+          shopify app deploy \
+            --config production \
+            --allow-updates \
+            --source-control-url "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}" \
+            --verbose
