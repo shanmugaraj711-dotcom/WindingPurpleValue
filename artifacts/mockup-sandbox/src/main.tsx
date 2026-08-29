@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import "./lib/ensureCartLiftPixel";
 
 // Shopify App Bridge automatically adds a fresh ID token to same-origin
 // fetch() requests. Keep the native fetch path untouched so App Bridge can
