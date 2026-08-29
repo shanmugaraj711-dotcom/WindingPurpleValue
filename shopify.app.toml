@@ -1,18 +1,19 @@
-# CartLift Shopify CLI app configuration.
-# The Shopify Dev Dashboard client ID is linked to this app.
-# Never commit the app secret.
+# CartLift Shopify App Configuration
 name = "CartLift"
-client_id = "520369128d8be7253ef412e4727333b7"
-application_url = "https://windingpurplevalue.pages.dev"
+client_id = "PLACEHOLDER_CLIENT_ID"
+application_url = "https://PLACEHOLDER_APP_URL"
 embedded = true
 
 [access_scopes]
-scopes = "read_products,read_metafields,write_metafields,write_pixels,read_customer_events"
+scopes = "read_products,read_themes"
 
 [auth]
 redirect_urls = [
-  "https://windingpurplevalue.pages.dev/api/shopify/auth/callback"
+  "https://PLACEHOLDER_APP_URL/api/auth/callback"
 ]
 
-[build]
-automatically_update_urls_on_dev = false
+[webhooks]
+api_version = "2026-07"
+
+[pos]
+embedded = false

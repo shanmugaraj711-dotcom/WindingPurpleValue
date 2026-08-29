@@ -1,21 +1,10 @@
-<div id="cartlift-root" data-cartlift="v2">
-  <div class="cartlift-card" role="status" aria-live="polite">
-    <div class="cartlift-heading">
-      <span>CartLift</span>
-      <button class="cartlift-close" type="button" aria-label="Close">×</button>
-    </div>
-    <div class="cartlift-message">Add items to your cart to see CartLift offers.</div>
-    <div class="cartlift-track"><div class="cartlift-progress"></div></div>
-    <div class="cartlift-recommendation" hidden>
-      <div class="cartlift-rec-copy">
-        <span class="cartlift-rec-label">You may also like</span>
-        <strong class="cartlift-rec-title"></strong>
-        <span class="cartlift-rec-price"></span>
-      </div>
-      <button class="cartlift-add" type="button">Add</button>
-    </div>
-  </div>
-</div>
+{% comment %}
+  CartLift V1 storefront embed foundation.
+  The conversion UI will be wired in the next batch; this block intentionally
+  contains no theme-code edits and remains lightweight when disabled.
+{% endcomment %}
+
+<div id="cartlift-root" data-cartlift="v1" hidden></div>
 
 {% schema %}
 {
