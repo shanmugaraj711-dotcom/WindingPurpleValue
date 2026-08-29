@@ -1,10 +1,15 @@
 {% comment %}
-  CartLift V1 storefront embed foundation.
-  The conversion UI will be wired in the next batch; this block intentionally
-  contains no theme-code edits and remains lightweight when disabled.
+  CartLift V1 storefront conversion embed.
+  Reads the real Shopify cart and uses Shopify's recommendation endpoint to show
+  one relevant next-product suggestion plus a configurable cart-value goal.
 {% endcomment %}
 
-<div id="cartlift-root" data-cartlift="v1" hidden></div>
+<div
+  id="cartlift-root"
+  data-cartlift="v1"
+  data-free-shipping-threshold="{{ block.settings.free_shipping_threshold | times: 100 }}"
+  hidden
+></div>
 
 {% schema %}
 {
@@ -12,6 +17,17 @@
   "target": "body",
   "javascript": "cartlift.js",
   "stylesheet": "cartlift.css",
-  "settings": []
+  "settings": [
+    {
+      "type": "range",
+      "id": "free_shipping_threshold",
+      "label": "Free-shipping goal",
+      "info": "Cart value in your store currency. Set to 0 to hide the goal.",
+      "min": 0,
+      "max": 5000,
+      "step": 50,
+      "default": 1000
+    }
+  ]
 }
 {% endschema %}
