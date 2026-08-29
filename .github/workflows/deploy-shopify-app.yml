@@ -47,5 +47,6 @@ jobs:
           shopify app deploy \
             --config production \
             --allow-updates \
+            --allow-deletes \
             --source-control-url "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}" \
             --verbose
