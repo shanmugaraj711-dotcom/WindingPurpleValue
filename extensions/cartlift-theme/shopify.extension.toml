@@ -1,4 +1,3 @@
-name = "CartLift Tracker"
+name = "CartLift Theme"
 type = "theme"
-handle = "cart-tracker"
-uid = "f58939dd-7a82-9fe7-0652-9de1f5054c756d759fcd"
+handle = "cartlift-theme"
