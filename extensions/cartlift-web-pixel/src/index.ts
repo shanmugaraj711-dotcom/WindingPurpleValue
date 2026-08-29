@@ -39,4 +39,10 @@ register(({ analytics, init, customerPrivacy, settings }) => {
   for (const eventName of EVENT_NAMES) {
     analytics.subscribe(eventName, (event) => send(eventName, event));
   }
+
+  // Shopify's storefront cart:view DOM event fires for both the cart page and
+  // the cart drawer. The theme embed publishes a CartLift-specific event only
+  // for the drawer, so this becomes a real cart-view signal without counting
+  // the cart page twice.
+  analytics.subscribe("cartlift:cart_drawer_viewed", (event) => send("cart_viewed", event));
 });
