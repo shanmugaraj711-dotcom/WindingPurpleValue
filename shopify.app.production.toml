@@ -26,3 +26,15 @@ uri = "/api/shopify/webhooks"
 [[webhooks.subscriptions]]
 compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
 uri = "/api/shopify/webhooks"
+
+# Shopify CLI's current remote validation can require an Events section even
+# for apps that otherwise only use standard webhooks. Keep this minimal and
+# use it only as a health signal; no customer data is processed here.
+[events]
+api_version = "unstable"
+
+[[events.subscription]]
+handle = "cartlift-product-update-health"
+topic = "Product"
+actions = ["update"]
+uri = "/api/shopify/events"
