@@ -1,12 +1,12 @@
 # CartLift production Shopify CLI app configuration.
 # Production deployment intentionally reuses the same Shopify app/client.
 name = "CartLift"
-client_id = "520369128d8be7253ef412e4727333b7"
+client_id = "520369128d0be7253ef412e4727333b7"
 application_url = "https://windingpurplevalue.pages.dev"
 embedded = true
 
 [access_scopes]
-scopes = "read_products,read_metafields,write_metafields,write_pixels,read_customer_events"
+scopes = "read_products"
 
 [auth]
 redirect_urls = [
