@@ -28,13 +28,27 @@ register(({ analytics, init, customerPrivacy, settings }) => {
     analyticsAllowed = event.customerPrivacy.analyticsProcessingAllowed;
   });
 
+  // A short-lived session identifier lets CartLift calculate funnel metrics
+  // without collecting customer identity. It is generated per pixel runtime.
+  const sessionId = (() => {
+    try { return crypto.randomUUID(); }
+    catch { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
+  })();
+
   const send = (eventName: string, event: PixelEvent) => {
     if (!analyticsAllowed) return;
+    const eventId = event.id || (() => {
+      try { return crypto.randomUUID(); }
+      catch { return `${eventName}-${Date.now()}-${Math.random().toString(36).slice(2)}`; }
+    })();
+
     fetch(apiBaseUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         event: eventName,
+        eventId,
+        sessionId,
         shop,
         timestamp: Date.parse(event.timestamp || "") || Date.now(),
         payload: {
