@@ -41,8 +41,3 @@ export async function ensureCartLiftPixel(): Promise<boolean> {
   }
   return false;
 }
-
-// Activate when App Bridge is available. The explicit export is also used by
-// the React app after Shopify connection is confirmed, covering slow App Bridge
-// initialization and iframe navigation in production.
-void ensureCartLiftPixel();
