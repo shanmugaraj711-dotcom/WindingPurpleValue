@@ -45,6 +45,7 @@ EOF
           echo "Required webhook configuration present."
 
       # CI authentication is supplied only by the Shopify App Automation Token.
+      # Keep this workflow triggerable from main after production config changes.
       - name: Deploy app configuration and extensions
         env:
           SHOPIFY_APP_AUTOMATION_TOKEN: ${{ secrets.SHOPIFY_APP_AUTOMATION_TOKEN }}
