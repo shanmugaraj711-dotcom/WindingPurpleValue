@@ -6,7 +6,8 @@ application_url = "https://windingpurplevalue.pages.dev"
 embedded = true
 
 [access_scopes]
-scopes = "read_products"
+# Shopper analytics requires Shopify's Web Pixels API permissions.
+scopes = "read_products,write_pixels,read_customer_events"
 
 [auth]
 redirect_urls = [
@@ -27,9 +28,6 @@ uri = "/api/shopify/webhooks"
 compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
 uri = "/api/shopify/webhooks"
 
-# Shopify CLI's current remote validation can require an Events section even
-# for apps that otherwise only use standard webhooks. Keep this minimal and
-# use it only as a health signal; no customer data is processed here.
 [events]
 api_version = "unstable"
 
