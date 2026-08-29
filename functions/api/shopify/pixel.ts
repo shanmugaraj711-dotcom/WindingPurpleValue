@@ -30,7 +30,7 @@ async function exchange(idToken: string, shop: string, env: Env): Promise<string
   const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-    body: new URLSearchParams({ client_id: env.SHOPIFY_API_KEY, client_secret: env.SHOPIFY_API_SECRET, grant_type: "urn:ietf:params:oauth:grant-type:token-exchange", subject_token: idToken, subject_token_type: "urn:ietf:params:oauth:token-type:id_token", requested_token_type: "urn:shopify:params:oauth:token-type:online-access-token" }),
+    body: new URLSearchParams({ client_id: env.SHOPIFY_API_KEY, client_secret: env.SHOPIFY_API_SECRET, grant_type: "urn:ietf:params:oauth:grant-type:token-exchange", subject_token: idToken, subject_token_type: "urn:shopify:params:oauth:token-type:id_token", requested_token_type: "urn:shopify:params:oauth:token-type:online-access-token" }),
   });
   if (response.status === 400) throw new Error(INVALID_ID_TOKEN);
   if (!response.ok) throw new Error(`Shopify token exchange failed (${response.status}).`);
@@ -50,6 +50,18 @@ async function pixelMutation(shop: string, accessToken: string, apiVersion: stri
   return payload.data;
 }
 
+const WEB_PIXEL_QUERY = "query CartLiftWebPixel { webPixel { id settings } }";
+const WEB_PIXEL_CREATE = "mutation CartLiftWebPixelCreate($webPixel: WebPixelInput!) { webPixelCreate(webPixel: $webPixel) { userErrors { field message code } webPixel { id settings } } }";
+const WEB_PIXEL_UPDATE = "mutation CartLiftWebPixelUpdate($id: ID!, $webPixel: WebPixelInput!) { webPixelUpdate(id: $id, webPixel: $webPixel) { userErrors { field message code } webPixel { id settings } } }";
+
+type WebPixel = { id?: string; settings?: string } | null;
+type PixelPayload = { userErrors?: Array<{ field?: string[]; message?: string; code?: string }>; webPixel?: WebPixel };
+
+function pixelErrors(result?: PixelPayload): string | null {
+  if (!result?.userErrors?.length) return null;
+  return result.userErrors.map((e) => e.message || "Web pixel error").join("; ");
+}
+
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   try {
     const idToken = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
@@ -58,7 +70,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const shop = new URL(claims.dest!).hostname;
     const accessToken = await exchange(idToken, shop, env);
     const apiVersion = env.SHOPIFY_API_VERSION || "2026-07";
-    const data = await pixelMutation(shop, accessToken, apiVersion, "query CartLiftWebPixel { webPixel { id settings } }", {} ) as { webPixel?: { id?: string; settings?: string } | null };
+    const data = await pixelMutation(shop, accessToken, apiVersion, WEB_PIXEL_QUERY, {}) as { webPixel?: WebPixel };
     return Response.json({ connected: Boolean(data.webPixel), webPixel: data.webPixel ?? null });
   } catch (error) {
     if (error instanceof Error && error.message === INVALID_ID_TOKEN) return invalidSessionResponse();
@@ -74,14 +86,25 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     const shop = new URL(claims.dest!).hostname;
     const accessToken = await exchange(idToken, shop, env);
     const apiVersion = env.SHOPIFY_API_VERSION || "2026-07";
-    const data = await pixelMutation(shop, accessToken, apiVersion, "mutation CartLiftWebPixelCreate($webPixel: WebPixelInput!) { webPixelCreate(webPixel: $webPixel) { userErrors { field message code } webPixel { id settings } } }", { webPixel: { settings: PIXEL_SETTINGS } }) as { webPixelCreate?: { userErrors?: Array<{ field?: string[]; message?: string; code?: string }>; webPixel?: { id?: string; settings?: string } | null } };
-    const result = data.webPixelCreate;
-    if (result?.userErrors?.length) {
-      const taken = result.userErrors.some((error) => error.code === "TAKEN");
-      if (taken) return Response.json({ connected: true, webPixel: null, alreadyConnected: true });
-      return Response.json({ error: result.userErrors.map((e) => e.message || "Web pixel error").join("; ") }, { status: 400 });
+
+    // Activation is an upsert: an existing app web-pixel record must also be
+    // updated so older installs receive the current analytics endpoint.
+    const existingData = await pixelMutation(shop, accessToken, apiVersion, WEB_PIXEL_QUERY, {}) as { webPixel?: WebPixel };
+    const existing = existingData.webPixel;
+
+    if (existing?.id) {
+      const data = await pixelMutation(shop, accessToken, apiVersion, WEB_PIXEL_UPDATE, { id: existing.id, webPixel: { settings: PIXEL_SETTINGS } }) as { webPixelUpdate?: PixelPayload };
+      const result = data.webPixelUpdate;
+      const error = pixelErrors(result);
+      if (error) return Response.json({ error }, { status: 400 });
+      return Response.json({ connected: Boolean(result?.webPixel), webPixel: result?.webPixel ?? existing, updated: true });
     }
-    return Response.json({ connected: Boolean(result?.webPixel), webPixel: result?.webPixel ?? null });
+
+    const data = await pixelMutation(shop, accessToken, apiVersion, WEB_PIXEL_CREATE, { webPixel: { settings: PIXEL_SETTINGS } }) as { webPixelCreate?: PixelPayload };
+    const result = data.webPixelCreate;
+    const error = pixelErrors(result);
+    if (error) return Response.json({ error }, { status: 400 });
+    return Response.json({ connected: Boolean(result?.webPixel), webPixel: result?.webPixel ?? null, updated: false });
   } catch (error) {
     if (error instanceof Error && error.message === INVALID_ID_TOKEN) return invalidSessionResponse();
     return Response.json({ error: error instanceof Error ? error.message : "Unable to activate web pixel." }, { status: 502 });
