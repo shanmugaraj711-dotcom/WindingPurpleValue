@@ -21,7 +21,7 @@ jobs:
           node-version: 22
 
       - name: Install Shopify CLI
-        run: npm install -g @shopify/cli@latest
+        run: npm install -g @shopify/cli@4.6.1
 
       - name: Install web pixel extension dependencies
         run: npm install --prefix extensions/cartlift-web-pixel --ignore-scripts
