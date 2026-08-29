@@ -10,6 +10,13 @@ const EVENT_NAMES = [
   "checkout_completed",
 ] as const;
 
+type PixelEvent = {
+  id?: string;
+  data?: unknown;
+  customData?: unknown;
+  timestamp?: string;
+};
+
 register(({ analytics, init, customerPrivacy, settings }) => {
   const apiBaseUrl = String(settings?.endpoint || "https://windingpurplevalue.pages.dev/api/analytics");
   const hostname = init.context.document.location?.hostname || "";
@@ -21,7 +28,7 @@ register(({ analytics, init, customerPrivacy, settings }) => {
     analyticsAllowed = event.customerPrivacy.analyticsProcessingAllowed;
   });
 
-  const send = (eventName: string, event: { id?: string; data?: unknown; timestamp?: string }) => {
+  const send = (eventName: string, event: PixelEvent) => {
     if (!analyticsAllowed) return;
     fetch(apiBaseUrl, {
       method: "POST",
@@ -30,7 +37,11 @@ register(({ analytics, init, customerPrivacy, settings }) => {
         event: eventName,
         shop,
         timestamp: Date.parse(event.timestamp || "") || Date.now(),
-        payload: { id: event.id ?? null, data: event.data ?? null },
+        payload: {
+          id: event.id ?? null,
+          data: event.data ?? null,
+          customData: event.customData ?? null,
+        },
       }),
       keepalive: true,
     }).catch(() => undefined);
@@ -40,9 +51,8 @@ register(({ analytics, init, customerPrivacy, settings }) => {
     analytics.subscribe(eventName, (event) => send(eventName, event));
   }
 
-  // Shopify's storefront cart:view DOM event fires for both the cart page and
-  // the cart drawer. The theme embed publishes a CartLift-specific event only
-  // for the drawer, so this becomes a real cart-view signal without counting
-  // the cart page twice.
+  // Compatibility fallback for themes that do not emit Shopify's standard
+  // cart:view event for a cart drawer. The theme embed publishes this custom
+  // event only after it confirms the drawer is actually open.
   analytics.subscribe("cartlift:cart_drawer_viewed", (event) => send("cart_viewed", event));
 });
