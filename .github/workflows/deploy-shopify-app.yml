@@ -35,18 +35,26 @@ jobs:
           unset SHOPIFY_API_SECRET
           echo "Shopify CLI state cleared and legacy auth variables unset."
 
+      # Shopify CLI needs the app/org linkage restored in CI after the state reset.
+      - name: Restore Shopify project metadata
+        run: |
+          mkdir -p .shopify
+          cat > .shopify/project.json <<'EOF'
+          {
+            "appId": "520369128d8be7253ef412e4727333b7",
+            "title": "CartLift",
+            "orgId": "232482690"
+          }
+          EOF
+
       # CI authentication is supplied only by the Shopify App Automation Token.
-      # Pin the CartLift organization explicitly so non-interactive CI cannot
-      # resolve the app against an unrelated or missing organization context.
       - name: Deploy app configuration and extensions
         env:
           SHOPIFY_APP_AUTOMATION_TOKEN: ${{ secrets.SHOPIFY_APP_AUTOMATION_TOKEN }}
-          SHOPIFY_FLAG_ORGANIZATION_ID: "232482690"
         run: |
           if [ -z "$SHOPIFY_APP_AUTOMATION_TOKEN" ]; then
             echo "ERROR: SHOPIFY_APP_AUTOMATION_TOKEN is empty or unavailable."
             exit 1
           fi
           echo "SHOPIFY_APP_AUTOMATION_TOKEN is present."
-          echo "Deploying CartLift against organization ${SHOPIFY_FLAG_ORGANIZATION_ID}."
           shopify app deploy --config production --allow-updates --source-control-url "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}" --verbose
