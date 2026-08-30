@@ -19,7 +19,6 @@ type AnalyticsRecord = {
   sessions?: number;
   eventIds?: string[];
   lastEventAt?: number;
-  delivery?: DeliveryDiagnostics;
 };
 const INVALID_ID_TOKEN = "INVALID_ID_TOKEN";
 
@@ -79,14 +78,7 @@ function buildInsights(events: Record<string, number>, sessions: number) {
 function updateDelivery(current: DeliveryDiagnostics | undefined, stage: string, status: "ok" | "error", event?: string, error?: string): DeliveryDiagnostics {
   const counts = { ...(current?.counts ?? {}) };
   counts[stage] = (counts[stage] ?? 0) + 1;
-  return {
-    counts,
-    lastStage: stage,
-    lastStatus: status,
-    lastUpdatedAt: Date.now(),
-    lastEvent: event || current?.lastEvent,
-    lastError: error || undefined,
-  };
+  return { counts, lastStage: stage, lastStatus: status, lastUpdatedAt: Date.now(), lastEvent: event || current?.lastEvent, lastError: error || undefined };
 }
 
 // A 204 response MUST have a null body. Response.json(null, { status: 204 })
@@ -110,10 +102,10 @@ export const onRequestPost: PagesFunction<AnalyticsEnv> = async ({ request, env 
     if (!diagnosticShop || !/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(diagnosticShop)) return response(400, { error: "Invalid shop.", diagnosticStage: "endpoint_rejected" });
     if (!env.CARTLIFT_ANALYTICS_KV) return response(202, { ok: true, persisted: false, diagnostic: true });
     try {
-      const key = `analytics:${diagnosticShop}`;
-      const current = await env.CARTLIFT_ANALYTICS_KV.get(key, "json") as AnalyticsRecord | null;
-      const delivery = updateDelivery(current?.delivery, diagnosticStage, diagnosticStatus, diagnosticEvent, diagnosticError);
-      await env.CARTLIFT_ANALYTICS_KV.put(key, JSON.stringify({ ...(current ?? {}), delivery }), { expirationTtl: 60 * 60 * 24 * 180 });
+      const key = `analytics:delivery:${diagnosticShop}`;
+      const current = await env.CARTLIFT_ANALYTICS_KV.get(key, "json") as DeliveryDiagnostics | null;
+      const delivery = updateDelivery(current ?? undefined, diagnosticStage, diagnosticStatus, diagnosticEvent, diagnosticError);
+      await env.CARTLIFT_ANALYTICS_KV.put(key, JSON.stringify(delivery), { expirationTtl: 60 * 60 * 24 * 180 });
       return response(202, { ok: true, persisted: true, diagnostic: true });
     } catch { return response(503, { error: "Analytics storage failed.", diagnosticStage: "kv_persist_failed" }); }
   }
@@ -137,24 +129,18 @@ export const onRequestPost: PagesFunction<AnalyticsEnv> = async ({ request, env 
     const eventIds = current?.eventIds ?? [];
     const sessions = current?.sessions ?? 0;
 
-    if (eventIds.includes(eventId)) {
-      const delivery = updateDelivery(current?.delivery, "duplicate_event", "ok", event);
-      await env.CARTLIFT_ANALYTICS_KV.put(key, JSON.stringify({ ...(current ?? {}), delivery }), { expirationTtl: 60 * 60 * 24 * 180 });
-      return response(202, { ok: true, persisted: true, duplicate: true });
-    }
+    if (eventIds.includes(eventId)) return response(202, { ok: true, persisted: true, duplicate: true });
 
     events[event] = Math.min((events[event] ?? 0) + 1, 10_000_000);
     const nextEventIds = [...eventIds, eventId].slice(-5000);
     const knownSession = Boolean(current?.eventIds?.length && current.eventIds.includes(`session:${sessionId}`));
     if (!knownSession) nextEventIds.push(`session:${sessionId}`);
-    const delivery = updateDelivery(current?.delivery, "kv_persisted", "ok", event);
     await env.CARTLIFT_ANALYTICS_KV.put(key, JSON.stringify({
       events,
       total: Object.values(events).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0),
       sessions: sessions + (knownSession ? 0 : 1),
       eventIds: nextEventIds.slice(-10000),
       lastEventAt: Date.now(),
-      delivery,
     }), { expirationTtl: 60 * 60 * 24 * 180 });
     return response(202, { ok: true, persisted: true, duplicate: false });
   } catch {
@@ -170,18 +156,11 @@ export const onRequestGet: PagesFunction<AnalyticsEnv> = async ({ request, env }
     const shop = new URL(claims.dest!).hostname;
     if (!env.CARTLIFT_ANALYTICS_KV) return response(200, { configured: false, events: {}, total: 0, sessions: 0, insights: buildInsights({}, 0), lastEventAt: null, delivery: null });
     const data = await env.CARTLIFT_ANALYTICS_KV.get(`analytics:${shop}`, "json") as AnalyticsRecord | null;
+    const delivery = await env.CARTLIFT_ANALYTICS_KV.get(`analytics:delivery:${shop}`, "json") as DeliveryDiagnostics | null;
     const events = data?.events ?? {};
     const sessions = data?.sessions ?? 0;
     const total = data?.total ?? Object.values(events).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
-    return response(200, {
-      configured: true,
-      events,
-      total,
-      sessions,
-      insights: buildInsights(events, sessions),
-      lastEventAt: data?.lastEventAt ?? null,
-      delivery: data?.delivery ?? null,
-    });
+    return response(200, { configured: true, events, total, sessions, insights: buildInsights(events, sessions), lastEventAt: data?.lastEventAt ?? null, delivery });
   } catch (error) {
     if (error instanceof Error && error.message === INVALID_ID_TOKEN) return response(401, { error: "Invalid Shopify ID token." });
     return response(502, { error: "Unable to load analytics." });
