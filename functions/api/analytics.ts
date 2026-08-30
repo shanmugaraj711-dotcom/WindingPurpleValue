@@ -31,8 +31,14 @@ function verifyIdToken(token: string, env: AnalyticsEnv): Claims {
   if (destination.protocol !== "https:" || !destination.hostname.endsWith(".myshopify.com")) throw new Error(INVALID_ID_TOKEN);
   return claims;
 }
+const CORS_HEADERS = {
+  "Cache-Control": "no-store",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type,Authorization",
+};
 function response(status: number, body: unknown): Response {
-  return Response.json(body, { status, headers: { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type,Authorization" } });
+  return Response.json(body, { status, headers: CORS_HEADERS });
 }
 function rate(numerator: number, denominator: number): number {
   if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) return 0;
@@ -68,7 +74,12 @@ function buildInsights(events: Record<string, number>, sessions: number) {
     sessions,
   };
 }
-export const onRequestOptions: PagesFunction<AnalyticsEnv> = async () => response(204, null);
+
+// A 204 response MUST have a null body. Response.json(null, { status: 204 })
+// still creates a JSON body and Cloudflare Workers rejects it with:
+// "Response with null body status (101, 204, 205, or 304) cannot have a body."
+export const onRequestOptions: PagesFunction<AnalyticsEnv> = async () =>
+  new Response(null, { status: 204, headers: CORS_HEADERS });
 
 export const onRequestPost: PagesFunction<AnalyticsEnv> = async ({ request, env }) => {
   try {
