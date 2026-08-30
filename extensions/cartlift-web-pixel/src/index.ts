@@ -18,6 +18,8 @@ type PixelEvent = {
   timestamp?: string;
 };
 
+type DiagnosticStage = "pixel_initialized" | "privacy_blocked" | "request_failed" | "endpoint_rejected" | "endpoint_accepted";
+
 register(({ analytics, init, customerPrivacy, settings }) => {
   const apiBaseUrl = String(settings?.endpoint || "https://windingpurplevalue.pages.dev/api/analytics");
   const hostname = init.context.document.location?.hostname || "";
@@ -25,6 +27,18 @@ register(({ analytics, init, customerPrivacy, settings }) => {
   if (!shop) return;
 
   let analyticsAllowed = init.customerPrivacy?.analyticsProcessingAllowed ?? true;
+
+  const reportDiagnostic = (stage: DiagnosticStage, event?: string, error?: string) => {
+    fetch(apiBaseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ diagnostic: { stage, status: stage === "request_failed" || stage === "endpoint_rejected" || stage === "privacy_blocked" ? "error" : "ok", shop, event, error } }),
+      keepalive: true,
+    }).catch(() => undefined);
+  };
+
+  reportDiagnostic("pixel_initialized");
+
   customerPrivacy.subscribe("visitorConsentCollected", (event) => {
     analyticsAllowed = event.customerPrivacy.analyticsProcessingAllowed;
   });
@@ -35,7 +49,10 @@ register(({ analytics, init, customerPrivacy, settings }) => {
   })();
 
   const send = (eventName: string, event: PixelEvent) => {
-    if (!analyticsAllowed) return;
+    if (!analyticsAllowed) {
+      reportDiagnostic("privacy_blocked", eventName);
+      return;
+    }
     const eventId = event.id || (() => {
       try { return crypto.randomUUID(); }
       catch { return `${eventName}-${Date.now()}-${Math.random().toString(36).slice(2)}`; }
@@ -57,7 +74,17 @@ register(({ analytics, init, customerPrivacy, settings }) => {
         },
       }),
       keepalive: true,
-    }).catch(() => undefined);
+    }).then(async (response) => {
+      if (response.ok) return;
+      let error = `HTTP ${response.status}`;
+      try {
+        const payload = await response.json() as { error?: string };
+        error = payload.error || error;
+      } catch { /* response body is optional for diagnostics */ }
+      reportDiagnostic("endpoint_rejected", eventName, error);
+    }).catch((error) => {
+      reportDiagnostic("request_failed", eventName, error instanceof Error ? error.message : "Network request failed");
+    });
   };
 
   for (const eventName of EVENT_NAMES) {
