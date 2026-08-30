@@ -6,11 +6,13 @@ type ShopifyStatus = { loading: boolean; connected: boolean; shop?: { name?: str
 type OfferType = "percentage" | "fixed" | "free_shipping";
 type Offer = { id: string; name: string; type: OfferType; value: number; minCartValue: number; enabled: boolean; createdAt: string };
 type Product = { id: string; title: string; status: string; totalInventory: number; priceRangeV2?: { minVariantPrice?: { amount: string; currencyCode: string }; maxVariantPrice?: { amount: string; currencyCode: string } } };
-type Analytics = { configured: boolean; events: Record<string, number>; total: number; lastEventAt?: number | null };
+type DeliveryDiagnostics = { counts?: Record<string, number>; lastStage?: string; lastStatus?: string; lastUpdatedAt?: number; lastEvent?: string; lastError?: string };
+type Analytics = { configured: boolean; events: Record<string, number>; total: number; lastEventAt?: number | null; delivery?: DeliveryDiagnostics | null };
 
 type ShopifyBridge = { idToken?: () => Promise<string> };
 
 const DEFAULT_OFFERS: Offer[] = [{ id: "starter-offer", name: "10% off orders over ₹1,000", type: "percentage", value: 10, minCartValue: 1000, enabled: true, createdAt: new Date().toISOString() }];
+const HEALTH_WINDOW_MS = 15 * 60 * 1000;
 
 function resolveComponent(mod: Record<string, unknown>, name: string): ComponentType | undefined {
   const fns = Object.values(mod).filter((v) => typeof v === "function") as ComponentType[];
@@ -59,9 +61,6 @@ async function shopifyIdToken(): Promise<string> {
 }
 
 async function shopifyFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-  // Shopify ID tokens expire after about one minute. App Bridge can return a
-  // cached token with little lifetime remaining, so retry once with a fresh
-  // token when the backend marks the 401 as retryable.
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const token = await shopifyIdToken();
     const headers = new Headers(init.headers);
@@ -88,7 +87,35 @@ async function analyticsApi(): Promise<Analytics> {
   const response = await shopifyFetch("/api/analytics", { cache: "no-store" });
   const payload = await response.json() as Analytics & { error?: string };
   if (!response.ok) throw new Error(payload.error || `Analytics API failed (${response.status}).`);
-  return { configured: Boolean(payload.configured), events: payload.events ?? {}, total: payload.total ?? 0, lastEventAt: payload.lastEventAt ?? null };
+  return {
+    configured: Boolean(payload.configured),
+    events: payload.events ?? {},
+    total: payload.total ?? 0,
+    lastEventAt: payload.lastEventAt ?? null,
+    delivery: payload.delivery ?? null,
+  };
+}
+function formatLastEvent(lastEventAt?: number | null): string {
+  if (!lastEventAt) return "No event received yet";
+  const age = Math.max(0, Date.now() - lastEventAt);
+  if (age < 60_000) return "Less than a minute ago";
+  const minutes = Math.floor(age / 60_000);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+}
+function deliveryLabel(stage?: string): string {
+  const labels: Record<string, string> = {
+    pixel_initialized: "Pixel initialized",
+    privacy_blocked: "Privacy blocked",
+    request_failed: "Request failed",
+    endpoint_rejected: "Endpoint rejected",
+    endpoint_accepted: "Endpoint accepted",
+    kv_persisted: "KV persisted",
+    kv_persist_failed: "KV persistence failed",
+    duplicate_event: "Duplicate ignored",
+  };
+  return labels[stage || ""] || stage || "No delivery diagnostic yet";
 }
 
 function CartLiftApp() {
@@ -106,7 +133,7 @@ function CartLiftApp() {
   const [products, setProducts] = useState<Product[]>([]);
   const [productsLoading, setProductsLoading] = useState(false);
   const [productsError, setProductsError] = useState<string | null>(null);
-  const [analytics, setAnalytics] = useState<Analytics>({ configured: false, events: {}, total: 0, lastEventAt: null });
+  const [analytics, setAnalytics] = useState<Analytics>({ configured: false, events: {}, total: 0, lastEventAt: null, delivery: null });
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsError, setAnalyticsError] = useState<string | null>(null);
 
@@ -150,11 +177,17 @@ function CartLiftApp() {
     try { setAnalytics(await analyticsApi()); } catch (e) { setAnalyticsError(e instanceof Error ? e.message : "Unable to load shopper events."); } finally { setAnalyticsLoading(false); }
   }
   useEffect(() => { if (status.connected) void loadAnalytics(); }, [status.connected]);
+  useEffect(() => {
+    if (!status.connected) return;
+    const timer = window.setInterval(() => void loadAnalytics(), 60_000);
+    return () => window.clearInterval(timer);
+  }, [status.connected]);
 
   const enabled = useMemo(() => offers.filter((o) => o.enabled).length, [offers]);
   const inventory = useMemo(() => products.reduce((sum, p) => sum + (p.totalInventory || 0), 0), [products]);
   const activeProducts = useMemo(() => products.filter((p) => p.status === "ACTIVE").length, [products]);
   const event = (name: string): number => analytics.events[name] ?? 0;
+  const pixelActive = Boolean(analytics.configured && analytics.lastEventAt && Date.now() - analytics.lastEventAt < HEALTH_WINDOW_MS);
 
   async function persist(next: Offer[]): Promise<void> {
     setOffers(next); setSaving(true); setOfferError(null);
@@ -184,7 +217,16 @@ function CartLiftApp() {
 
       {section === "offers" && <section className="rounded-2xl border bg-white p-6 shadow-sm"><div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-2xl font-semibold">Offers</h2><p className="mt-1 text-sm text-gray-500">Create and manage offer rules stored on this Shopify store.</p></div><button type="button" onClick={create} disabled={!status.connected || saving} className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40">Create offer</button></div>{offerError && <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p className="font-medium">Shopify offer storage needs attention</p><p className="mt-1">{offerError}</p><button type="button" onClick={() => void loadOffers()} className="mt-3 rounded-md border border-amber-300 bg-white px-3 py-1.5 font-medium">Retry</button></div>}{formOpen && <form onSubmit={submit} className="mt-6 rounded-xl border bg-gray-50 p-5"><div className="grid gap-4 md:grid-cols-2"><label className="text-sm font-medium">Offer name<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Weekend cart boost" className="mt-1 w-full rounded-lg border bg-white px-3 py-2 font-normal" /></label><label className="text-sm font-medium">Offer type<select value={type} onChange={(e) => setType(e.target.value as OfferType)} className="mt-1 w-full rounded-lg border bg-white px-3 py-2 font-normal"><option value="percentage">Percentage discount</option><option value="fixed">Fixed discount</option><option value="free_shipping">Free shipping</option></select></label><label className="text-sm font-medium">Value<input type="number" min="0" value={value} onChange={(e) => setValue(e.target.value)} disabled={type === "free_shipping"} className="mt-1 w-full rounded-lg border bg-white px-3 py-2 font-normal disabled:opacity-50" /></label><label className="text-sm font-medium">Minimum cart value<input type="number" min="0" value={minimum} onChange={(e) => setMinimum(e.target.value)} className="mt-1 w-full rounded-lg border bg-white px-3 py-2 font-normal" /></label></div><div className="mt-4 flex gap-2"><button type="submit" disabled={saving} className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40">{saving ? "Saving…" : editing ? "Save changes" : "Create offer"}</button><button type="button" onClick={reset} className="rounded-lg border bg-white px-4 py-2 text-sm font-medium">Cancel</button></div></form>}<div className="mt-6 space-y-3">{offers.length === 0 && <div className="rounded-xl border border-dashed p-8 text-center text-sm text-gray-500">No offers yet. Create your first CartLift offer.</div>}{offers.map((o) => <div key={o.id} className="flex flex-col gap-4 rounded-xl border p-5 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2"><h3 className="font-medium">{o.name}</h3><span className={`rounded-full px-2 py-0.5 text-xs ${o.enabled ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>{o.enabled ? "Active" : "Paused"}</span></div><p className="mt-1 text-sm text-gray-500">{offerText(o)} · minimum cart ₹{o.minCartValue.toLocaleString("en-IN")}</p></div><div className="flex gap-2"><button type="button" disabled={saving} onClick={() => void persist(offers.map((x) => x.id === o.id ? { ...x, enabled: !x.enabled } : x))} className="rounded-lg border px-3 py-2 text-sm">{o.enabled ? "Pause" : "Activate"}</button><button type="button" disabled={saving} onClick={() => edit(o)} className="rounded-lg border px-3 py-2 text-sm">Edit</button><button type="button" disabled={saving} onClick={() => void persist(offers.filter((x) => x.id !== o.id))} className="rounded-lg border px-3 py-2 text-sm text-red-600">Delete</button></div></div>)}</div><p className="mt-5 text-xs text-gray-400">Rules are persisted in Shopify metafields. Local browser storage is only a temporary fallback.</p></section>}
 
-      {section === "insights" && <section className="rounded-2xl border bg-white p-6 shadow-sm"><div className="flex items-center justify-between"><div><h2 className="text-2xl font-semibold">Cart insights</h2><p className="mt-1 text-sm text-gray-500">Live store products plus real storefront shopper events.</p></div><div className="flex gap-2"><button type="button" onClick={() => void loadProducts()} disabled={productsLoading} className="rounded-lg border bg-white px-3 py-2 text-sm">{productsLoading ? "Refreshing…" : "Refresh products"}</button><button type="button" onClick={() => void loadAnalytics()} disabled={analyticsLoading} className="rounded-lg border bg-white px-3 py-2 text-sm">{analyticsLoading ? "Refreshing…" : "Refresh events"}</button></div></div>{productsError && <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{productsError}</div>}{analyticsError && <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p className="font-medium">Shopper event tracking needs attention</p><p className="mt-1">{analyticsError}</p></div>}<div className="mt-6 grid gap-4 md:grid-cols-3"><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Products</p><p className="mt-1 text-2xl font-semibold">{products.length}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Active products</p><p className="mt-1 text-2xl font-semibold">{activeProducts}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Inventory units</p><p className="mt-1 text-2xl font-semibold">{inventory.toLocaleString("en-IN")}</p></div></div><div className="mt-5 grid gap-4 md:grid-cols-4"><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Product views</p><p className="mt-1 text-2xl font-semibold">{event("product_viewed")}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Add to cart</p><p className="mt-1 text-2xl font-semibold">{event("product_added_to_cart")}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Cart views</p><p className="mt-1 text-2xl font-semibold">{event("cart_viewed")}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Checkout started</p><p className="mt-1 text-2xl font-semibold">{event("checkout_started")}</p></div></div><div className="mt-4 grid gap-4 md:grid-cols-4"><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Removed from cart</p><p className="mt-1 text-2xl font-semibold">{event("product_removed_from_cart")}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Checkouts completed</p><p className="mt-1 text-2xl font-semibold">{event("checkout_completed")}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Page views</p><p className="mt-1 text-2xl font-semibold">{event("page_viewed")}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">All tracked events</p><p className="mt-1 text-2xl font-semibold">{analytics.total}</p></div></div><div className="mt-6 overflow-hidden rounded-xl border"><div className="border-b bg-gray-50 px-4 py-3 text-sm font-medium">Product signals</div>{products.slice(0, 10).map((p) => <div key={p.id} className="flex items-center justify-between border-b px-4 py-3 last:border-0"><div><p className="font-medium">{p.title}</p><p className="text-xs text-gray-500">{p.status}</p></div><p className="text-sm text-gray-600">{p.totalInventory ?? 0} units</p></div>)}{!productsLoading && products.length === 0 && <div className="p-6 text-center text-sm text-gray-500">No products returned.</div>}</div><div className="mt-5 rounded-xl border bg-gray-50 p-4 text-sm text-gray-600">{analytics.configured ? `Analytics storage is configured. ${analytics.total} shopper events are persisted.` : "Analytics storage is not configured on this deployment yet."}{analytics.lastEventAt ? ` Last event: ${new Date(analytics.lastEventAt).toLocaleString()}.` : " No shopper event has reached CartLift yet."}</div></section>}
+      {section === "insights" && <section className="rounded-2xl border bg-white p-6 shadow-sm"><div className="flex items-center justify-between"><div><h2 className="text-2xl font-semibold">Cart insights</h2><p className="mt-1 text-sm text-gray-500">Live store products plus real storefront shopper events.</p></div><div className="flex gap-2"><button type="button" onClick={() => void loadProducts()} disabled={productsLoading} className="rounded-lg border bg-white px-3 py-2 text-sm">{productsLoading ? "Refreshing…" : "Refresh products"}</button><button type="button" onClick={() => void loadAnalytics()} disabled={analyticsLoading} className="rounded-lg border bg-white px-3 py-2 text-sm">{analyticsLoading ? "Refreshing…" : "Refresh events"}</button></div></div>{productsError && <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{productsError}</div>}{analyticsError && <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p className="font-medium">Shopper event tracking needs attention</p><p className="mt-1">{analyticsError}</p></div>}
+        <div className={`mt-6 rounded-xl border p-5 ${pixelActive ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}`}>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div><div className="flex items-center gap-2"><span className={`h-2.5 w-2.5 rounded-full ${pixelActive ? "bg-green-500" : "bg-amber-500"}`} /><p className="font-semibold">Pixel: {pixelActive ? "Active" : analytics.lastEventAt ? "No recent events" : "Waiting for first event"}</p></div><p className="mt-1 text-sm text-gray-600">Last event received: {formatLastEvent(analytics.lastEventAt)} · {analytics.total} total events</p></div>
+            <div className="text-left text-xs text-gray-600 sm:text-right"><p>Delivery: <span className="font-medium">{deliveryLabel(analytics.delivery?.lastStage)}</span></p>{analytics.delivery?.lastUpdatedAt && <p className="mt-1">Diagnostic: {formatLastEvent(analytics.delivery.lastUpdatedAt)}</p>}</div>
+          </div>
+          {analytics.delivery?.lastError && <p className="mt-3 rounded-lg border border-amber-300 bg-white/70 px-3 py-2 text-xs text-amber-900">Last delivery error: {analytics.delivery.lastError}</p>}
+          {analytics.delivery?.counts && <div className="mt-4 flex flex-wrap gap-2">{Object.entries(analytics.delivery.counts).map(([stage, count]) => <span key={stage} className="rounded-full border bg-white px-2.5 py-1 text-xs text-gray-600">{deliveryLabel(stage)} · {count}</span>)}</div>}
+        </div>
+        <div className="mt-6 grid gap-4 md:grid-cols-3"><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Products</p><p className="mt-1 text-2xl font-semibold">{products.length}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Active products</p><p className="mt-1 text-2xl font-semibold">{activeProducts}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Inventory units</p><p className="mt-1 text-2xl font-semibold">{inventory.toLocaleString("en-IN")}</p></div></div><div className="mt-5 grid gap-4 md:grid-cols-4"><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Product views</p><p className="mt-1 text-2xl font-semibold">{event("product_viewed")}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Add to cart</p><p className="mt-1 text-2xl font-semibold">{event("product_added_to_cart")}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Cart views</p><p className="mt-1 text-2xl font-semibold">{event("cart_viewed")}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Checkout started</p><p className="mt-1 text-2xl font-semibold">{event("checkout_started")}</p></div></div><div className="mt-4 grid gap-4 md:grid-cols-4"><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Removed from cart</p><p className="mt-1 text-2xl font-semibold">{event("product_removed_from_cart")}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Checkouts completed</p><p className="mt-1 text-2xl font-semibold">{event("checkout_completed")}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Page views</p><p className="mt-1 text-2xl font-semibold">{event("page_viewed")}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">All tracked events</p><p className="mt-1 text-2xl font-semibold">{analytics.total}</p></div></div><div className="mt-6 overflow-hidden rounded-xl border"><div className="border-b bg-gray-50 px-4 py-3 text-sm font-medium">Product signals</div>{products.slice(0, 10).map((p) => <div key={p.id} className="flex items-center justify-between border-b px-4 py-3 last:border-0"><div><p className="font-medium">{p.title}</p><p className="text-xs text-gray-500">{p.status}</p></div><p className="text-sm text-gray-600">{p.totalInventory ?? 0} units</p></div>)}{!productsLoading && products.length === 0 && <div className="p-6 text-center text-sm text-gray-500">No products returned.</div>}</div><div className="mt-5 rounded-xl border bg-gray-50 p-4 text-sm text-gray-600">{analytics.configured ? `Analytics storage is configured. ${analytics.total} shopper events are persisted.` : "Analytics storage is not configured on this deployment yet."}{analytics.lastEventAt ? ` Last event: ${new Date(analytics.lastEventAt).toLocaleString()}.` : " No shopper event has reached CartLift yet."}</div></section>}
 
       {section === "performance" && <section className="rounded-2xl border bg-white p-6 shadow-sm"><h2 className="text-2xl font-semibold">Performance</h2><p className="mt-1 text-sm text-gray-500">Real storefront event counts from the connected store.</p><div className="mt-6 grid gap-4 md:grid-cols-4"><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Offer rules</p><p className="mt-1 text-2xl font-semibold">{offers.length}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Active rules</p><p className="mt-1 text-2xl font-semibold">{enabled}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Add to carts</p><p className="mt-1 text-2xl font-semibold">{event("product_added_to_cart")}</p></div><div className="rounded-xl border p-5"><p className="text-sm text-gray-500">Completed checkouts</p><p className="mt-1 text-2xl font-semibold">{event("checkout_completed")}</p></div></div><div className="mt-6 flex items-center justify-between rounded-xl border bg-gray-50 p-5"><div><p className="font-medium">Tracked shopper events</p><p className="mt-1 text-sm text-gray-600">{analytics.total} total events persisted for this store.</p></div><button type="button" onClick={() => void loadAnalytics()} disabled={analyticsLoading} className="rounded-lg border bg-white px-3 py-2 text-sm">{analyticsLoading ? "Refreshing…" : "Refresh"}</button></div></section>}
     </main>
