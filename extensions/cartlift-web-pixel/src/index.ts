@@ -25,7 +25,6 @@ register(({ analytics, init, customerPrivacy, settings }) => {
   if (!shop) return;
 
   let analyticsAllowed = init.customerPrivacy?.analyticsProcessingAllowed ?? true;
-  console.log("[CartLift DEBUG] analyticsAllowed:", analyticsAllowed, "raw:", init.customerPrivacy?.analyticsProcessingAllowed);
   customerPrivacy.subscribe("visitorConsentCollected", (event) => {
     analyticsAllowed = event.customerPrivacy.analyticsProcessingAllowed;
   });
