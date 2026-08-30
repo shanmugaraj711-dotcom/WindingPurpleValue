@@ -5,12 +5,21 @@ type AnalyticsEnv = {
 };
 
 type Claims = { aud?: string; dest?: string; exp?: number; nbf?: number; iss?: string };
+type DeliveryDiagnostics = {
+  counts?: Record<string, number>;
+  lastStage?: string;
+  lastStatus?: string;
+  lastUpdatedAt?: number;
+  lastEvent?: string;
+  lastError?: string;
+};
 type AnalyticsRecord = {
   events?: Record<string, number>;
   total?: number;
   sessions?: number;
   eventIds?: string[];
   lastEventAt?: number;
+  delivery?: DeliveryDiagnostics;
 };
 const INVALID_ID_TOKEN = "INVALID_ID_TOKEN";
 
@@ -54,14 +63,7 @@ function buildInsights(events: Record<string, number>, sessions: number) {
   const removals = events.product_removed_from_cart ?? 0;
 
   return {
-    funnel: {
-      pageViews,
-      productViews,
-      addToCarts,
-      cartViews,
-      checkoutStarts,
-      checkoutCompletions,
-    },
+    funnel: { pageViews, productViews, addToCarts, cartViews, checkoutStarts, checkoutCompletions },
     rates: {
       productViewRate: rate(productViews, pageViews),
       addToCartRate: rate(addToCarts, productViews),
@@ -74,55 +76,89 @@ function buildInsights(events: Record<string, number>, sessions: number) {
     sessions,
   };
 }
+function updateDelivery(current: DeliveryDiagnostics | undefined, stage: string, status: "ok" | "error", event?: string, error?: string): DeliveryDiagnostics {
+  const counts = { ...(current?.counts ?? {}) };
+  counts[stage] = (counts[stage] ?? 0) + 1;
+  return {
+    counts,
+    lastStage: stage,
+    lastStatus: status,
+    lastUpdatedAt: Date.now(),
+    lastEvent: event || current?.lastEvent,
+    lastError: error || undefined,
+  };
+}
 
 // A 204 response MUST have a null body. Response.json(null, { status: 204 })
-// still creates a JSON body and Cloudflare Workers rejects it with:
-// "Response with null body status (101, 204, 205, or 304) cannot have a body."
+// still creates a JSON body and Cloudflare Workers rejects it.
 export const onRequestOptions: PagesFunction<AnalyticsEnv> = async () =>
   new Response(null, { status: 204, headers: CORS_HEADERS });
 
 export const onRequestPost: PagesFunction<AnalyticsEnv> = async ({ request, env }) => {
-  try {
-    const body = await request.json() as Record<string, unknown>;
-    const event = typeof body.event === "string" ? body.event.slice(0, 80) : "unknown";
-    const shop = typeof body.shop === "string" ? body.shop : "";
-    const eventId = typeof body.eventId === "string" ? body.eventId.slice(0, 120) : "";
-    const sessionId = typeof body.sessionId === "string" ? body.sessionId.slice(0, 120) : "";
-    if (!shop || !/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(shop)) return response(400, { error: "Invalid shop." });
-    if (!eventId || !sessionId) return response(400, { error: "Missing event identity." });
-    if (typeof body.timestamp !== "number" || !Number.isFinite(body.timestamp)) return response(400, { error: "Invalid timestamp." });
-    const allowedEvents = new Set(["page_viewed", "product_viewed", "product_added_to_cart", "product_removed_from_cart", "cart_viewed", "checkout_started", "checkout_completed"]);
-    if (!allowedEvents.has(event)) return response(400, { error: "Unsupported event." });
+  let body: Record<string, unknown>;
+  try { body = await request.json() as Record<string, unknown>; }
+  catch { return response(400, { error: "Invalid JSON.", diagnosticStage: "endpoint_rejected" }); }
 
-    if (env.CARTLIFT_ANALYTICS_KV) {
-      const key = `analytics:${shop}`;
+  const diagnostic = body.diagnostic as Record<string, unknown> | undefined;
+  const diagnosticStage = typeof diagnostic?.stage === "string" ? diagnostic.stage.slice(0, 60) : "";
+  const diagnosticStatus = diagnostic?.status === "error" ? "error" : "ok";
+  const diagnosticError = typeof diagnostic?.error === "string" ? diagnostic.error.slice(0, 200) : undefined;
+  const diagnosticEvent = typeof diagnostic?.event === "string" ? diagnostic.event.slice(0, 80) : undefined;
+  const diagnosticShop = typeof diagnostic?.shop === "string" ? diagnostic.shop : typeof body.shop === "string" ? body.shop : "";
+
+  if (diagnosticStage) {
+    if (!diagnosticShop || !/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(diagnosticShop)) return response(400, { error: "Invalid shop.", diagnosticStage: "endpoint_rejected" });
+    if (!env.CARTLIFT_ANALYTICS_KV) return response(202, { ok: true, persisted: false, diagnostic: true });
+    try {
+      const key = `analytics:${diagnosticShop}`;
       const current = await env.CARTLIFT_ANALYTICS_KV.get(key, "json") as AnalyticsRecord | null;
-      const events = current?.events ?? {};
-      const eventIds = current?.eventIds ?? [];
-      const sessions = current?.sessions ?? 0;
+      const delivery = updateDelivery(current?.delivery, diagnosticStage, diagnosticStatus, diagnosticEvent, diagnosticError);
+      await env.CARTLIFT_ANALYTICS_KV.put(key, JSON.stringify({ ...(current ?? {}), delivery }), { expirationTtl: 60 * 60 * 24 * 180 });
+      return response(202, { ok: true, persisted: true, diagnostic: true });
+    } catch { return response(503, { error: "Analytics storage failed.", diagnosticStage: "kv_persist_failed" }); }
+  }
 
-      // Pixel delivery can retry. Treat an event ID as idempotent so one
-      // shopper action cannot inflate merchant metrics more than once.
-      if (eventIds.includes(eventId)) return response(202, { ok: true, persisted: true, duplicate: true });
+  const event = typeof body.event === "string" ? body.event.slice(0, 80) : "unknown";
+  const shop = typeof body.shop === "string" ? body.shop : "";
+  const eventId = typeof body.eventId === "string" ? body.eventId.slice(0, 120) : "";
+  const sessionId = typeof body.sessionId === "string" ? body.sessionId.slice(0, 120) : "";
+  const reject = (error: string) => response(400, { error, diagnosticStage: "endpoint_rejected", event });
+  if (!shop || !/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(shop)) return reject("Invalid shop.");
+  if (!eventId || !sessionId) return reject("Missing event identity.");
+  if (typeof body.timestamp !== "number" || !Number.isFinite(body.timestamp)) return reject("Invalid timestamp.");
+  const allowedEvents = new Set(["page_viewed", "product_viewed", "product_added_to_cart", "product_removed_from_cart", "cart_viewed", "checkout_started", "checkout_completed"]);
+  if (!allowedEvents.has(event)) return reject("Unsupported event.");
 
-      events[event] = Math.min((events[event] ?? 0) + 1, 10_000_000);
-      const nextEventIds = [...eventIds, eventId].slice(-5000);
-      const knownSession = Boolean(current?.eventIds?.length && current?.eventIds.includes(`session:${sessionId}`));
-      // Keep session markers separate from event IDs to avoid changing the
-      // event count; they are bounded and only used for funnel denominator.
-      if (!knownSession) nextEventIds.push(`session:${sessionId}`);
-      await env.CARTLIFT_ANALYTICS_KV.put(key, JSON.stringify({
-        events,
-        total: Object.values(events).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0),
-        sessions: sessions + (knownSession ? 0 : 1),
-        eventIds: nextEventIds.slice(-10000),
-        lastEventAt: Date.now(),
-      }), { expirationTtl: 60 * 60 * 24 * 180 });
-      return response(202, { ok: true, persisted: true, duplicate: false });
+  if (!env.CARTLIFT_ANALYTICS_KV) return response(202, { ok: true, persisted: false });
+  try {
+    const key = `analytics:${shop}`;
+    const current = await env.CARTLIFT_ANALYTICS_KV.get(key, "json") as AnalyticsRecord | null;
+    const events = current?.events ?? {};
+    const eventIds = current?.eventIds ?? [];
+    const sessions = current?.sessions ?? 0;
+
+    if (eventIds.includes(eventId)) {
+      const delivery = updateDelivery(current?.delivery, "duplicate_event", "ok", event);
+      await env.CARTLIFT_ANALYTICS_KV.put(key, JSON.stringify({ ...(current ?? {}), delivery }), { expirationTtl: 60 * 60 * 24 * 180 });
+      return response(202, { ok: true, persisted: true, duplicate: true });
     }
-    return response(202, { ok: true, persisted: false });
+
+    events[event] = Math.min((events[event] ?? 0) + 1, 10_000_000);
+    const nextEventIds = [...eventIds, eventId].slice(-5000);
+    const knownSession = Boolean(current?.eventIds?.length && current.eventIds.includes(`session:${sessionId}`));
+    if (!knownSession) nextEventIds.push(`session:${sessionId}`);
+    const delivery = updateDelivery(current?.delivery, "kv_persisted", "ok", event);
+    await env.CARTLIFT_ANALYTICS_KV.put(key, JSON.stringify({
+      events,
+      total: Object.values(events).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0),
+      sessions: sessions + (knownSession ? 0 : 1),
+      eventIds: nextEventIds.slice(-10000),
+      lastEventAt: Date.now(),
+      delivery,
+    }), { expirationTtl: 60 * 60 * 24 * 180 });
+    return response(202, { ok: true, persisted: true, duplicate: false });
   } catch {
-    return response(400, { error: "Invalid analytics event." });
+    return response(503, { error: "Analytics storage failed.", diagnosticStage: "kv_persist_failed", event });
   }
 };
 
@@ -132,7 +168,7 @@ export const onRequestGet: PagesFunction<AnalyticsEnv> = async ({ request, env }
     if (!idToken) throw new Error(INVALID_ID_TOKEN);
     const claims = verifyIdToken(idToken, env);
     const shop = new URL(claims.dest!).hostname;
-    if (!env.CARTLIFT_ANALYTICS_KV) return response(200, { configured: false, events: {}, total: 0, sessions: 0, insights: buildInsights({}, 0) });
+    if (!env.CARTLIFT_ANALYTICS_KV) return response(200, { configured: false, events: {}, total: 0, sessions: 0, insights: buildInsights({}, 0), lastEventAt: null, delivery: null });
     const data = await env.CARTLIFT_ANALYTICS_KV.get(`analytics:${shop}`, "json") as AnalyticsRecord | null;
     const events = data?.events ?? {};
     const sessions = data?.sessions ?? 0;
@@ -144,6 +180,7 @@ export const onRequestGet: PagesFunction<AnalyticsEnv> = async ({ request, env }
       sessions,
       insights: buildInsights(events, sessions),
       lastEventAt: data?.lastEventAt ?? null,
+      delivery: data?.delivery ?? null,
     });
   } catch (error) {
     if (error instanceof Error && error.message === INVALID_ID_TOKEN) return response(401, { error: "Invalid Shopify ID token." });
