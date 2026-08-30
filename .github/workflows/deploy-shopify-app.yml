@@ -35,7 +35,7 @@ jobs:
           test -f shopify.app.production.toml
           grep -q '^client_id = "520369128d0be7253ef412e4727333b7"' shopify.app.production.toml
           grep -q '^application_url = "https://windingpurplevalue.pages.dev"' shopify.app.production.toml
-          grep -q '^scopes = "read_products,write_pixels,read_customer_events"' shopify.app.production.toml
+          grep -q '^scopes = "read_products,read_pixels,write_pixels,read_customer_events"' shopify.app.production.toml
           echo "CartLift production config verified with shopper analytics scopes."
 
       - name: Deploy CartLift app and extensions
